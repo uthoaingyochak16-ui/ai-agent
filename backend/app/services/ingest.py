@@ -458,7 +458,8 @@ async def _apply_router(session: AsyncSession, r: Resolved, text: str, d: Router
     if d.needs_human or d.intent in ("handover_request", "complaint"):
         await pause_ai(session, r.conversation, f"router:{d.intent}")
         await session.commit()
-        await _say(session, r, await localized(session, "handover_ack", text, lang), sources={"path": "router_handover"})
+        ack = "complaint_handover_ack" if d.intent == "complaint" else "handover_ack"   # a complaint is apologised for first
+        await _say(session, r, await localized(session, ack, text, lang), sources={"path": "router_handover"})
         await session.commit()
         return True
     if d.intent == "erasure_request":  # not the exact keyword: confirm first, never erase on the model's word

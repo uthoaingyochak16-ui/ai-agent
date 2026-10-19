@@ -638,6 +638,8 @@
     ],
     "handover_ack": "আমি আপনাকে আমাদের একজন প্রতিনিধির সাথে যুক্ত করছি, শীঘ্রই এখানেই উত্তর পাবেন।",
     "handover_ack_en": "I'm connecting you with a team member. They will reply here shortly.",
+    "complaint_handover_ack": "আপনার খারাপ অভিজ্ঞতার জন্য আমরা আন্তরিকভাবে দুঃখিত। বিষয়টি গুরুত্বের সাথে দেখা হবে; আমি আপনাকে আমাদের একজন প্রতিনিধির সাথে যুক্ত করছি, শীঘ্রই এখানেই উত্তর পাবেন।",
+    "complaint_handover_ack_en": "We are truly sorry about your experience and will take it seriously. I'm connecting you with a team member; they will reply here shortly.",
     "ai_auto_resume_minutes": 30
   },
   "consent_and_privacy": {

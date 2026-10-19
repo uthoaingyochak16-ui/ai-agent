@@ -32,9 +32,13 @@ words, and use the RECENT TURNS to see what a short or vague message refers to. 
  "language": "bn"|"en"|"banglish", "needs_human": true|false, "standalone_question": string|null, "request": string|null}
 Rules:
 - greeting: only a hello / salam with no request. smalltalk: chit-chat about the assistant (who are you, how are you, thanks, bye).
-- question: asks for information or help. Put a self-contained version in standalone_question, in the customer's
-  language, resolving references to earlier turns ("oita koto?" -> what "oita" refers to). Otherwise null.
+- question: asks for information or help. Put a self-contained version in standalone_question, resolving references
+  to earlier turns ("oita koto?" -> what "oita" refers to). It is used to search a knowledge base written in Bangla
+  script: write it in Bangla script when the customer writes Bangla or Banglish ("sadakayon ki?" -> "সাদাকায়ন কী?",
+  "Dhakai next course kobe?" -> "ঢাকায় পরবর্তী কোর্স কবে?"), in English only when the customer writes English.
+  Otherwise null.
 - handover_request: wants a human / staff / phone call. complaint: unhappy, reports a problem with a service or staff.
+  An urgent need (blood, a medical emergency) is not a complaint: it is a question, with needs_human true.
 - consent_yes / consent_no: ONLY when CONSENT_ASKED is yes and the message answers that question.
 - A bare acknowledgement ("ji", "ok", "accha", "thik ache", "thanks") is smalltalk, unless the ASSISTANT's last turn
   asked the customer something: then it is that question's answer, intent question, and standalone_question says what
@@ -51,6 +55,8 @@ Rules:
   ALWAYS true when the customer wants to pay, asks how or where to pay (bKash, Nagad, bank ...), says they paid or
   money was deducted, or asks about a refund, a receipt, instalments or a payment problem: payments are handled only
   by staff. Asking how much something costs (the fee or price) is a normal question: needs_human false.
+- language: "en" only when the customer writes English sentences, or the chat so far is in English. A single word or
+  short fragment ("fee?", "Dhakai?", "ok", "link?") in a Bangla/Banglish chat, or with no earlier turns, is "banglish".
 - Tokens like [PHONE_1] are privacy placeholders; keep them unchanged. Never answer the question yourself."""
 
 

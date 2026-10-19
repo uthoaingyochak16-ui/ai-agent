@@ -70,7 +70,7 @@ async def test_complaint_and_needs_human_hand_over(env):
     env.fake.script["router-m"] = decision("complaint", language="en")
     r = await say(env, "your staff was rude to me yesterday", "c1")
     assert r.conversation.ai_paused and r.conversation.handover_reason == "router:complaint"
-    assert (await bot_texts(env.session))[-1] == DEFAULTS["handover_ack_en"]
+    assert (await bot_texts(env.session))[-1] == DEFAULTS["complaint_handover_ack_en"]   # apologised for, then handed over
 
     env.fake.script["router-m"] = decision("question", needs_human=True)
     r = await say(env, "বুকে ব্যথা করছে এখন কী করব", "c2", uid="test:router2")

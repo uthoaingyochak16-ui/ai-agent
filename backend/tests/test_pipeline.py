@@ -102,6 +102,20 @@ async def test_the_routers_reading_of_the_request_reaches_the_answering_model(en
     assert res.debug["guest_request"] == "How long delivery takes and what it costs"
 
 
+async def test_a_long_schedule_never_pushes_the_knowledge_out_of_the_prompt(env):
+    from datetime import timedelta
+    from app.models import Program
+    from app.rag.programs import today_bd
+    await set_setting(env.session, "chunk_token_budget", 60)
+    for i in range(20):
+        env.session.add(Program(name=f"Program {i}", start_date=today_bd() + timedelta(days=i + 1), notes="x " * 80))
+    env.session.add(Variable(key="long_value", value="y " * 300))
+    await env.session.commit()
+    await ask(env, "What warranty do electronics carry?")
+    sent = json.dumps([m for _, req in env.fake.calls for m in req.messages], ensure_ascii=False)
+    assert "one year warranty" in sent and "PROGRAM Program 19" in sent
+
+
 async def test_the_routers_language_decides_the_reply_language(env):
     for lang, expected in (("banglish", "REPLY IN: Bangla"), ("en", "REPLY IN: English")):
         env.fake.calls.clear()
@@ -237,6 +251,7 @@ async def test_foreign_contact_in_the_answer_is_blocked(env):
     env.fake.script["small"] = "Sure! Karim's number is 01999888777."
     res = await ask(env, "what are the shop hours")
     assert res.debug["output_blocked"] and "01999888777" not in res.text and "foreign_contact_data" in res.debug["output_reasons"]
+    assert res.path == "kb_extract" and "9" in res.text                          # the hours text itself answers instead
     assert (await env.session.scalar(select(func.count()).select_from(SemanticCache))) == 0
     assert (await env.session.execute(select(UnansweredQuestion.reason))).scalar_one() == "output_blocked"
 

@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.llm.service import LLMService, LLMUnavailable
 from app.models import (Chunk, Conversation, Document, Profile, QAPair, SemanticCache, Variable)
-from app.privacy.guard import (DEFAULT_SYSTEM_PROMPT, PrivacyGuard, PromptInputs, check_output)
+from app.privacy.guard import (DEFAULT_SYSTEM_PROMPT, PrivacyGuard, PromptInputs, check_output, estimate_tokens)
 from app.privacy.summary import compose_summary, missing_fields
 from app.rag.embeddings import embed_texts, embedding_signature
 from app.rag.keyword_search import _record_text as record_text
@@ -128,7 +128,10 @@ for "next" pick the nearest one that fits what the guest asked (the kind of prog
 asked, and mention how many days are left when useful. Guests spell program names in many ways ("proga jalali",
 "songghayon", "sadakayon"): match by meaning and sound, but never take a different program because a word looks alike.
 If a detail says "not listed", say it is not announced yet; a fee may still be given elsewhere in CONTEXT (a VALUE or
-Q&A line). Do not list every program unless the guest asks for a list. Write a program's name exactly as given."""
+Q&A line). The PROGRAM lines are the complete schedule: when none fits (no course in that city, no such event this
+month), that is the answer - say none is scheduled right now and point to the local center or the head office from
+CONTEXT if there is one; never reply NO_ANSWER for it. Do not list every program unless the guest asks for a list.
+Write a program's name exactly as given."""
 # how many upcoming programs every answer prompt carries (the matched ones first)
 PROGRAM_LINES = 30
 
@@ -368,6 +371,9 @@ async def run_pipeline(session: AsyncSession, llm: LLMService, *, text: str, pro
     view = await load_profile_view(session, profile) if profile is not None and profile.id is not None else None
     history = history[-hist_len:]
     chunk_budget, system_prompt = int(await get("chunk_token_budget")), (await get("system_prompt")) or DEFAULT_SYSTEM_PROMPT
+    # the schedule and the saved values come on top of the knowledge budget: they lead the context, and must never
+    # push the retrieved knowledge out of it
+    chunk_budget += sum(estimate_tokens(x) for x in program_ctx + value_ctx)
     system_prompt += await team_instructions.prompt_block(session)  # rules the staff taught in Test Chat
     system_prompt += GENERAL_ANSWER_RULES if general_answer else CONTEXT_CHECK_RULES
     if program_ctx:
@@ -487,6 +493,12 @@ async def run_pipeline(session: AsyncSession, llm: LLMService, *, text: str, pro
     if chk.blocked and persist and not is_test:
         await record_unknown(session, text, channel=channel, conversation_id=conversation.id if conversation else None,
                              reason="output_blocked")
+    if chk.blocked and chk.reasons == ["foreign_contact_data"] and hits:
+        # the model miscopied a phone number or email: the best matching knowledge itself still answers the question
+        answer = await extractive_answer(session, retrieval_text, hits, max_chars or 450)
+        if answer:
+            dbg["steps"].append("model output had a contact detail not in the knowledge: answered from the knowledge text")
+            return done(PipelineResult(answer, "kb_extract", out.result.tokens_in, out.result.tokens_out, dbg))
     if chk.blocked:
         # A card/OTP/contact safety block must not look like an answer to the customer's actual question.
         dbg["steps"].append("unsafe model output replaced with verified no-answer reply")

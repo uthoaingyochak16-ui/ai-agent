@@ -1,0 +1,128 @@
+{
+  "_about": "Golden test set: real-style chats with what each reply must do. Run with scripts/golden_eval.py. 'expect' is read by an AI judge together with today's date, the upcoming programs and the saved values, so program dates are never hard-coded here. 'handover': true = the chat must be passed to a person (AI paused). Edit freely; keep ids stable so scores stay comparable.",
+  "cases": [
+    {"id": "greet-1", "tags": ["greeting"], "turns": [
+      {"user": "Assalamu alaikum", "expect": "A short, warm greeting reply (salam returned) that offers help. No other information."}
+    ]},
+    {"id": "next-program-followups", "tags": ["programs", "follow-up"], "turns": [
+      {"user": "নেক্সট প্রোগ্রাম কবে?", "expect": "Names the nearest upcoming program from the schedule with its date (and place if listed). In Bangla. Does not dump the whole list."},
+      {"user": "Eta abar ki program?", "expect": "Explains what that same program is, using what the knowledge has; if no description is known, says so briefly and still keeps to that program. Does not ask which program."},
+      {"user": "kothay hobe?", "expect": "Gives the venue of that same program from the schedule. Does not ask which program."}
+    ]},
+    {"id": "next-course-city", "tags": ["programs", "course", "follow-up", "banglish"], "turns": [
+      {"user": "Next course kobe?", "expect": "Gives the nearest upcoming Quantum Method meditation course (a 'কোয়ান্টাম মেথড মেডিটেশন কোর্স' batch) with date and place. Reply in Bangla."},
+      {"user": "Dhakai?", "expect": "Gives the next Quantum Method meditation course batch held in Dhaka (place in Dhaka, e.g. IDEB Bhaban, Kakrail) with its date. Reply in Bangla, not English. Must not claim there is no Dhaka course if the schedule has one."},
+      {"user": "fee koto?", "expect": "Course fee 11,500 taka. In Bangla."},
+      {"user": "ar Chottogram e kobe?", "expect": "Says honestly that no Chattogram course is in the current schedule (unless the schedule has one) and may point to the Chattogram center or head office for upcoming dates. Must not invent a date."}
+    ]},
+    {"id": "prajna-jalali", "tags": ["programs", "spelling"], "turns": [
+      {"user": "Next proga jalali program date kobe?", "expect": "Recognises 'proga jalali' as the program 'প্রজ্ঞা জালালি' and gives its date from the schedule (and place if listed). Must not answer with a different program."},
+      {"user": "kothay?", "expect": "Gives the venue of প্রজ্ঞা জালালি from the schedule."}
+    ]},
+    {"id": "this-month", "tags": ["programs", "list"], "turns": [
+      {"user": "e month e ar ki ki program ache?", "expect": "Lists the programs in the schedule for the rest of the current month, with dates. Only programs from the schedule. In Bangla."}
+    ]},
+    {"id": "sadakayon", "tags": ["programs", "knowledge", "follow-up"], "turns": [
+      {"user": "sadakayon ki?", "expect": "Sadakaion is an open weekly program of Quantum Foundation with group meditation, topic-based discussion and counselling, held every Friday at every center/branch/cell, open to all."},
+      {"user": "koyta theke?", "expect": "Friday 9 am (সকাল ৯টা)."},
+      {"user": "oitay ki registration lage?", "expect": "No registration needed / it is open to everyone (as the knowledge says it is open to all). Must not say it does not know."}
+    ]},
+    {"id": "course-basics", "tags": ["course", "knowledge", "follow-up"], "turns": [
+      {"user": "Quantum method ki", "expect": "Describes the Quantum Method from the knowledge (meditation-based method/course for a better life). Not a generic 'I am an assistant' small-talk reply."},
+      {"user": "course koydin er?", "expect": "Four days."},
+      {"user": "kon language e hoy?", "expect": "Bangla."},
+      {"user": "amar boyosh 16, korte parbo?", "expect": "Yes: anyone from nine to ninety who understands Bangla can join (may add: confirm a batch's age limit with the office)."}
+    ]},
+    {"id": "course-topics", "tags": ["course", "knowledge"], "turns": [
+      {"user": "কোর্সে কী কী শেখানো হয়?", "expect": "28 techniques over four days, with a few examples such as breathing, relaxation, autosuggestion, monochhobi (visualisation), giving up smoking/addiction, keys to success."}
+    ]},
+    {"id": "registration", "tags": ["course", "registration", "follow-up"], "turns": [
+      {"user": "Ami kivabe e course e apply korbo? Er jonno amar ki ki lagbe?", "expect": "Registration form link yogafoundation.com.bd/bn/forms/course-registration-form; choose a batch, fill in details, verify by OTP on mobile, pay the fee; or contact the nearest branch/head office. Must NOT be a card/OTP safety warning instead of the answer."},
+      {"user": "link ta abar dao", "expect": "Gives the same registration form link again. Reply in Bangla."}
+    ]},
+    {"id": "fee-short", "tags": ["fee", "short"], "turns": [
+      {"user": "fee?", "expect": "Assumes the Quantum Method course and gives 11,500 taka (may mention other programs' fees are not announced). In Bangla."},
+      {"user": "discount ache?", "expect": "The course fee is fixed/the same for everyone (no discount), or says it has no discount information and suggests the office. Must not invent a discount."}
+    ]},
+    {"id": "fee-other-program", "tags": ["fee", "follow-up"], "turns": [
+      {"user": "yoga orientation ache?", "expect": "Yes: Quantum Yoga Orientation with its dates from the schedule; men at YMCA Bhaban (5th floor) Kakrail, women at Prashanti Hall, Shantinagar."},
+      {"user": "oitar fee koto?", "expect": "Says the yoga orientation fee is not announced/listed. Must NOT give the 11,500 taka course fee as the yoga fee."}
+    ]},
+    {"id": "yoga-women", "tags": ["programs", "follow-up"], "turns": [
+      {"user": "yoga class kobe?", "expect": "Quantum Yoga Orientation dates from the schedule (Friday-Saturday), times 10:30-5 first day, 9-5 second day if mentioned."},
+      {"user": "meyeder jonno alada?", "expect": "Yes, women's orientation is separate, at Prashanti Hall (head office), Shantinagar. In Bangla."}
+    ]},
+    {"id": "office-head", "tags": ["office", "english"], "turns": [
+      {"user": "Where is your head office?", "expect": "31/V (2nd floor), Shilpacharya Zainul Abedin Sarak, Shantinagar (beside Eastern Plus Market), Dhaka-1217. In English."},
+      {"user": "What time does it open?", "expect": "Opening hours are not published; suggests calling the head office (+88 01329 746605 / 01714 974333) before visiting. Must not invent hours and must not mention 'context'."},
+      {"user": "phone number?", "expect": "Head office mobile +88 01329 746605, +88 01714 974333 (landlines may also be given)."}
+    ]},
+    {"id": "office-bandarban-cox", "tags": ["office", "follow-up", "banglish"], "turns": [
+      {"user": "Bandarban e apnader office er location daw.", "expect": "Gives the Bandarban office address from the knowledge (Bandarban cell, Triratna Complex 4th floor opposite the DC office, Bandarban Sadar) and/or Quantumom at Lama, Bandarban. Must not say it does not know."},
+      {"user": "phone number?", "expect": "Phone numbers of that Bandarban office from the knowledge."},
+      {"user": "ar Cox's Bazar e?", "expect": "Cox's Bazar cell: Alamgir Mansion (4th floor), Advocate Firoz Ahmed Sarak, opposite Hotel Nid Mahal, Laldighi, Cox's Bazar-4700; mobile +88 01329 746726, +88 01306 257575."}
+    ]},
+    {"id": "office-chattogram", "tags": ["office", "bangla"], "turns": [
+      {"user": "চট্টগ্রামে আপনাদের সেন্টার কোথায়?", "expect": "Chattogram center: 'Badre Mahal', House 66 (ground floor), Road 6, O.R. Nizam Road R/A, Chattogram-4203; mobile +88 01329 746700, +88 01711 393010."}
+    ]},
+    {"id": "office-sylhet-en", "tags": ["office", "english"], "turns": [
+      {"user": "Do you have an office in Sylhet?", "expect": "Yes: Sylhet center, 'Nehar Garden', Swapnil#52 (2nd floor), Ramer Dighir Par, Mirzajangal, Sylhet-3100, with its phone numbers. In English."}
+    ]},
+    {"id": "blood-donate", "tags": ["blood", "follow-up"], "turns": [
+      {"user": "রক্ত দিতে চাই", "expect": "Welcomes it and says where/how: the voluntary blood donation program & Quantum Lab, 31/V (ground floor), Shantinagar, Dhaka, and/or its phone numbers (+88 01329 746677 ...). Must not say it does not know."},
+      {"user": "কোথায় যেতে হবে?", "expect": "Quantum Lab address: 31/V (ground floor), Shilpacharya Zainul Abedin Sarak, Shantinagar, Dhaka-1217."}
+    ]},
+    {"id": "blood-cost", "tags": ["blood", "banglish"], "turns": [
+      {"user": "Blood nite koto taka lage?", "expect": "Blood itself is free; processing/bag/screening cost is charged, 1,550 taka per unit of whole blood; no separate crossmatch charge; help for those who cannot pay. In Bangla."}
+    ]},
+    {"id": "blood-urgent", "tags": ["blood", "urgent"], "turns": [
+      {"user": "B+ রক্ত লাগবে জরুরি, রোগী ঢাকা মেডিকেলে", "expect": "Either hands the chat to a person, or immediately gives the blood program/Quantum Lab phone numbers and asks to call now. Must be quick and caring; must not just say 'I don't know'."}
+    ]},
+    {"id": "payment-bkash", "tags": ["payment", "handover"], "turns": [
+      {"user": "course fee koto?", "expect": "11,500 taka."},
+      {"user": "bkash e taka dibo kivabe?", "expect": "Hands the chat to a team member (payment is handled by staff). Must not give payment instructions or numbers.", "handover": true}
+    ]},
+    {"id": "payment-problem", "tags": ["payment", "handover"], "turns": [
+      {"user": "Taka pathaisi kintu confirmation pai nai", "expect": "Hands the chat to a team member. Must not give payment instructions.", "handover": true}
+    ]},
+    {"id": "refund", "tags": ["payment", "handover", "english"], "turns": [
+      {"user": "Can I get a refund if I can't attend?", "expect": "Hands the chat to a team member (refunds are handled by staff).", "handover": true}
+    ]},
+    {"id": "contact-team", "tags": ["handover", "english"], "turns": [
+      {"user": "I want to contact with your team members.", "expect": "Connects the person to a team member (handover).", "handover": true}
+    ]},
+    {"id": "complaint", "tags": ["handover", "complaint"], "turns": [
+      {"user": "আপনাদের অফিসের একজনের আচরণ খুব খারাপ ছিল", "expect": "Apologises and hands the chat to a team member.", "handover": true}
+    ]},
+    {"id": "donation", "tags": ["donation"], "turns": [
+      {"user": "bkash e donation number ki?", "expect": "Either gives the donation numbers from the knowledge (central 01315393646, Shantinagar office 01329746605 for bKash/Nagad/Rocket; list at donate.quantummethod.org.bd) or hands over to a person because money transfers are staff-only. Either is acceptable; it must not give course-payment instructions."}
+    ]},
+    {"id": "quantumom", "tags": ["knowledge"], "turns": [
+      {"user": "Quantumom ki? kothay?", "expect": "'Quantum + mamata = Quantumom', the Quantum center at Sarai union, Lama, Bandarban (meditation center since 1998, Cosmo School and Shishu Sadan are there)."}
+    ]},
+    {"id": "cosmo-school", "tags": ["knowledge", "english"], "turns": [
+      {"user": "What is Quantum Cosmo School?", "expect": "School at Sarai, Lama, Bandarban founded 2001 giving poor hill and Bengali children free food, clothing, housing and education; started with 7 children, now 2,500+ students. In English."}
+    ]},
+    {"id": "personal", "tags": ["personal"], "turns": [
+      {"user": "Amar name ki?", "expect": "Says it does not have the person's name (the test guest has none on file), politely; may offer help. Must not use the standard 'no information, type agent' reply."},
+      {"user": "tumi amar somporke ki jano?", "expect": "Says it has no personal details about them (or lists what the profile holds). Not the standard no-answer reply."}
+    ]},
+    {"id": "date", "tags": ["date"], "turns": [
+      {"user": "Ajke koi tarik?", "expect": "Today's date (the date given to the judge). Bangla preferred."},
+      {"user": "next program kotodin por?", "expect": "Names the nearest upcoming program and how many days from today."}
+    ]},
+    {"id": "out-of-scope", "tags": ["unknown"], "turns": [
+      {"user": "আজকের আবহাওয়া কেমন?", "expect": "Politely says it can't help with weather and offers help with the organisation's topics. Must not invent a weather report."},
+      {"user": "আপনাদের অফিসে internship করা যাবে?", "expect": "Honestly says it has no information on internships (standard no-answer reply or similar, offering a team member is fine). Must not invent an internship program."}
+    ]},
+    {"id": "ack-continue", "tags": ["follow-up", "ack"], "turns": [
+      {"user": "online e course kora jabe?", "expect": "Says whether online is possible from the knowledge, or that it doesn't have that detail; may mention the online registration form."},
+      {"user": "ok", "expect": "A short acknowledgement / 'anything else?' reply; or, if the previous reply offered something (e.g. help with registration), a brief follow-through on that offer. Must not start an unrelated answer or ask for consent."},
+      {"user": "thanks", "expect": "A short polite closing reply."}
+    ]},
+    {"id": "songhayon-continue", "tags": ["programs", "follow-up"], "turns": [
+      {"user": "Songghayon kobe?", "expect": "Recognises the program 'সঙ্ঘায়ন' and gives its date and place from the schedule (if it is still upcoming)."},
+      {"user": "eta kader jonno?", "expect": "Says what the knowledge has about who it is for (e.g. for those who completed the Quantum Method course / pro-masters) or that it does not have that detail. Keeps to সঙ্ঘায়ন."}
+    ]}
+  ]
+}
