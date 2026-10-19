@@ -48,6 +48,8 @@ services:
 
   frontend:
     build: ./frontend
+    environment:
+      FRAME_ANCESTORS: ${FRAME_ANCESTORS:-}   # sites allowed to show the dashboard in an iframe (the main app)
     ports:
       - "127.0.0.1:3000:80"   # this machine only; guests and Meta reach it through the cloudflared tunnel
     depends_on: [backend]

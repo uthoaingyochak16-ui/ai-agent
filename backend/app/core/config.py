@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     default_phone_region: str = "BD"
     upload_dir: str = "./uploads"
     cors_origins: str = "http://localhost:5173"
+
+    # Single sign-on from the main application (docs/INTEGRATION.md). Empty secret = SSO off.
+    sso_shared_secret: str = ""        # HS256 key the main app signs its short-lived login tokens with
+    sso_issuer: str = ""               # expected "iss" claim (e.g. "main-app"); empty = not checked
+    sso_default_role: str = "agent"    # role when the token names none (admin | agent)
+    sso_max_age_s: int = 300           # a token older than this is refused, and each token works once
     log_level: str = "INFO"
 
     @field_validator("encryption_key")

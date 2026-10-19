@@ -4,6 +4,7 @@ import Layout from "./components/Layout";
 import { Spinner } from "./components/ui";
 import { useAuth } from "./lib/auth";
 import Login from "./pages/Login";
+import SSO from "./pages/SSO";
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const InboxPage = lazy(() => import("./pages/Inbox"));
@@ -29,6 +30,7 @@ export default function App() {
     <Suspense fallback={<Spinner />}>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/sso" element={<SSO />} />
         <Route element={<Protected />}>
           <Route index element={<Dashboard />} />
           <Route path="inbox" element={<InboxPage />} />

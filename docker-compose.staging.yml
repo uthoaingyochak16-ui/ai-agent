@@ -43,6 +43,8 @@ services:
   frontend:
     build: ./frontend
     image: assistant-frontend:staging
+    environment:
+      FRAME_ANCESTORS: ${FRAME_ANCESTORS:-}   # sites allowed to show the dashboard in an iframe (the main app)
     ports:
       - "127.0.0.1:3001:80"
     depends_on: [backend]

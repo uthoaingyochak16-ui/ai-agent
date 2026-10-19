@@ -22,7 +22,7 @@ export async function api<T = any>(path: string, opts: Opts = {}): Promise<T> {
     headers,
     body: opts.form ?? (opts.body !== undefined ? JSON.stringify(opts.body) : undefined),
   });
-  if (res.status === 401 && !path.includes("/auth/login")) {
+  if (res.status === 401 && !path.includes("/auth/login") && !path.includes("/auth/sso")) {
     setToken(null);
     window.location.assign("/login");
   }

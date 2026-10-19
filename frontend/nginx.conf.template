@@ -1,3 +1,4 @@
+# Template: ${FRAME_ANCESTORS} is filled in from the environment when the container starts.
 server {
   listen 80;
   client_max_body_size 55m;                      # document uploads (50 MB limit in the API)
@@ -9,5 +10,7 @@ server {
   location /healthz   { proxy_pass http://backend:8000; }
 
   location /assets/ { expires 1y; add_header Cache-Control "public, immutable"; try_files $uri =404; }
-  location / { try_files $uri /index.html; add_header Cache-Control "no-cache"; }
+  # The dashboard may be shown inside the main application (iframe) only: FRAME_ANCESTORS lists its origins.
+  location / { try_files $uri /index.html; add_header Cache-Control "no-cache";
+               add_header Content-Security-Policy "frame-ancestors 'self' ${FRAME_ANCESTORS}" always; }
 }

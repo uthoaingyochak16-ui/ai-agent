@@ -77,6 +77,12 @@ class FakeRedis:
     async def expire(self, k, s):
         return True
 
+    async def set(self, k, v, nx=False, ex=None):
+        if nx and k in self.d:
+            return None
+        self.d[k] = v
+        return True
+
 
 class FakeQueue:
     def __init__(self):
