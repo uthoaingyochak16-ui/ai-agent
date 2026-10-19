@@ -1,0 +1,52 @@
+# Staging: a private copy of the assistant for trying changes before they go live.
+#   docker compose -f docker-compose.staging.yml up -d --build      -> dashboard on http://localhost:3001
+#   bash scripts/staging_refresh_db.sh                              -> copy the live database into staging
+# Own project name, database and volumes; no worker (no scheduled jobs, alerts or sends) and no public tunnel, so
+# guests never reach it and it never messages them. Test Chat works as on live.
+name: assistant-staging
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: assistant
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d assistant"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: ./backend
+    image: assistant-backend:staging
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://app:${POSTGRES_PASSWORD:-app}@postgres:5432/assistant
+      REDIS_URL: redis://redis:6379/0
+      UPLOAD_DIR: /uploads
+    volumes: [uploads:/uploads]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  frontend:
+    build: ./frontend
+    image: assistant-frontend:staging
+    ports:
+      - "127.0.0.1:3001:80"
+    depends_on: [backend]
+
+volumes:
+  pgdata:
+  uploads:
