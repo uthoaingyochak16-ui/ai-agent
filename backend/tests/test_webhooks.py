@@ -65,10 +65,14 @@ async def test_missing_or_bad_signature_rejected_and_nothing_stored(client, make
 
 
 async def test_valid_post_is_stored_and_enqueued(client, maker):
+    from app.services.settings_service import set_setting
+    async with maker() as s:
+        await set_setting(s, "debounce_seconds", 3)   # ships off; with it on: seen/typing job now, reply job after the wait
+        await s.commit()
     r = await post(client, "messenger", messenger_payload())
     assert r.status_code == 200 and r.json()["accepted"] == 1
     assert await count_events(maker) == 1
-    assert len(client.app.state.queue.jobs) == 1
+    assert [j[0] for j in client.app.state.queue.jobs] == ["ack_event_job", "process_event_job"]  # seen/typing now, reply after debounce
 
 
 async def test_duplicate_delivery_is_deduplicated(client, maker):
@@ -76,7 +80,7 @@ async def test_duplicate_delivery_is_deduplicated(client, maker):
     r2 = await post(client, "messenger", messenger_payload(mid="m_dup"))
     assert r2.status_code == 200 and r2.json()["accepted"] == 0
     assert await count_events(maker) == 1
-    assert len(client.app.state.queue.jobs) == 1
+    assert [j[0] for j in client.app.state.queue.jobs].count("process_event_job") == 1
 
 
 async def test_same_mid_on_different_channels_is_not_a_duplicate(client, maker):

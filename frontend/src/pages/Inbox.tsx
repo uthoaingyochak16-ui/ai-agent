@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Clock, Pause, Play, Send, User, UserRound } from "lucide-react";
+import { Bot, ClipboardList, Clock, Pause, Play, Send, User, UserRound, ThumbsDown } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Avatar, Badge, Button, ChannelBadge, Empty, ErrorNote, Field, Input, PageHeader, Select, Spinner, Textarea, useToast, cx } from "../components/ui";
+import ReplyInspector from "../components/ReplyInspector";
 import { ApiError, api } from "../lib/api";
 import { ago, when } from "../lib/format";
 
@@ -61,6 +62,11 @@ function Thread({ id, onBack }: { id: number; onBack: () => void }) {
   };
   useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [q.data?.messages?.length]);
   const refresh = () => { qc.invalidateQueries({ queryKey: ["conv", id] }); qc.invalidateQueries({ queryKey: ["convs"] }); };
+  // a wrong AI reply is blocked in the shared answer cache so no other guest gets it
+  // ...and the guest's question goes to Q&A manager -> Unknown questions, where a corrected draft waits for approval
+  const wrong = useMutation({ mutationFn: ({ answer, question }: { answer: string; question?: string }) => api<{ blocked: number }>("/api/cache/feedback", { body: { answer, question } }),
+    onSuccess: (r) => toast((r.blocked ? `Marked wrong: ${r.blocked} cached copy blocked.` : "Marked wrong.") + " Added to Unknown questions for a corrected answer.") });
+  const questionBefore = (mid: number) => [...(q.data?.messages ?? [])].filter((x: any) => x.role === "user" && x.id < mid).pop()?.content as string | undefined;
   const toggle = useMutation({ mutationFn: (pause: boolean) => api(`/api/conversations/${id}/${pause ? "pause" : "resume"}`, { method: "POST" }), onSuccess: refresh });
   const send = useMutation({
     mutationFn: () => api(`/api/conversations/${id}/reply`, { body: { text, template: tpl ? { name: tpl.name, language: tpl.language, body_params: tpl.params.split(",").map((s) => s.trim()).filter(Boolean) } : null } }),
@@ -93,18 +99,22 @@ function Thread({ id, onBack }: { id: number; onBack: () => void }) {
       <div className="max-h-[52vh] min-h-[280px] flex-1 space-y-3 overflow-y-auto p-4" role="log" aria-label="Messages">
         {c.messages.map((m: any) => {
           const mine = m.role !== "user";
-          const Icon = m.role === "user" ? User : m.role === "agent" ? UserRound : Bot;
+          const Icon = m.role === "user" ? User : m.role === "agent" ? UserRound : m.role === "system" ? ClipboardList : Bot;
           return (
             <div key={m.id} className={cx("flex", mine ? "justify-end" : "justify-start")}>
-              <div className={cx("max-w-[85%] rounded-panel px-3 py-2", m.role === "user" ? "bg-sunken" : m.role === "agent" ? "bg-blue-soft" : "bg-accent-soft")}>
-                <p className="mb-0.5 flex items-center gap-1 text-xs font-semibold text-muted"><Icon className="h-3 w-3" aria-hidden />{m.role === "user" ? "Customer" : m.role === "agent" ? "Staff" : "AI"}, {when(m.created_at)}</p>
+              <div className={cx("max-w-[85%] rounded-panel px-3 py-2", m.role === "user" ? "bg-sunken" : m.role === "agent" ? "bg-blue-soft" : m.role === "system" ? "border border-dashed border-warn bg-warn-soft" : "bg-accent-soft")}>
+                <p className="mb-0.5 flex items-center gap-1 text-xs font-semibold text-muted"><Icon className="h-3 w-3" aria-hidden />{m.role === "user" ? "Customer" : m.role === "agent" ? "Staff" : m.role === "system" ? "Note for staff (not sent)" : "AI"}, {when(m.created_at)}</p>
                 <p className="whitespace-pre-wrap break-words">{m.content}</p>
                 {m.attachments?.length > 0 && <p className="mt-1 text-xs text-muted">{m.attachments.length} attachment(s): {m.attachments.map((a: any) => a.type).join(", ")}</p>}
                 <div className="mt-1 flex flex-wrap gap-1">
                   {m.delivery_status === "blocked" && <Badge tone="danger">Not sent: {m.flag === "out_of_window" ? "outside messaging window" : m.flag}</Badge>}
-                  {m.delivery_status === "failed" && <Badge tone="danger">Delivery failed</Badge>}
-                  {m.sources?.path && <Badge>{m.sources.path}</Badge>}
+                  {m.delivery_status === "failed" && <Badge tone="danger">{m.flag === "replies_off" ? "Not sent: “Replies enabled” is off in Channels" : m.flag === "ChannelNotConfigured" ? "Not sent: channel not set up" : "Delivery failed"}</Badge>}
+                  {m.flag === "card_shared" && <Badge tone="danger">Alert: card number shared (hidden, guest warned)</Badge>}
+                  {m.flag === "card_request" && <Badge tone="danger">Alert: AI asked for card details (reply replaced)</Badge>}
+                  {m.sources?.inspector ? <Badge>{m.sources.inspector.path_group}</Badge> : m.sources?.path && <Badge>{m.sources.path}</Badge>}
+                  {m.role === "assistant" && <button type="button" className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold text-muted hover:bg-danger-soft hover:text-danger" onClick={() => wrong.mutate({ answer: m.content, question: questionBefore(m.id) })}><ThumbsDown className="h-3 w-3" aria-hidden />Wrong</button>}
                 </div>
+                {m.sources?.inspector && <details className="mt-2 rounded-ctl border border-line bg-surface px-2 py-1"><summary className="cursor-pointer text-xs font-semibold text-muted">Inspect this reply</summary><ReplyInspector i={m.sources.inspector} /></details>}
               </div>
             </div>
           );

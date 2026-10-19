@@ -15,11 +15,13 @@ class WebhookEvent(Base):
     __table_args__ = (
         UniqueConstraint("channel", "external_id", name="uq_event_channel_external"),
         Index("ix_events_status_received", "status", "received_at"),
+        Index("ix_events_sender", "channel", "sender_id", "id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     channel: Mapped[str] = mapped_column(String(16))
     external_id: Mapped[str] = mapped_column(String(160))
+    sender_id: Mapped[str | None] = mapped_column(String(128))  # the guest's channel id (debounce looks up their burst)
     payload: Mapped[dict] = mapped_column(JSONB)  # normalized message
     status: Mapped[str] = mapped_column(String(12), default="queued")  # queued|processing|done|failed
     attempts: Mapped[int] = mapped_column(default=0)
@@ -29,10 +31,14 @@ class WebhookEvent(Base):
 
 
 class ChannelConfig(Base):
+    """One connected account: a Facebook Page, an Instagram account or a WhatsApp number. A channel can have several;
+    incoming messages say which one they were sent to (recipient id = account_id), and replies go out through it."""
     __tablename__ = "channel_configs"
+    __table_args__ = (UniqueConstraint("channel", "account_id", name="uq_channel_account"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    channel: Mapped[str] = mapped_column(String(16), unique=True)
+    channel: Mapped[str] = mapped_column(String(16), index=True)
+    label: Mapped[str | None] = mapped_column(String(120))            # staff's name for it ("Quantum Method page")
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     account_id: Mapped[str | None] = mapped_column(String(64))       # page id / ig user id / phone_number_id
     waba_id: Mapped[str | None] = mapped_column(String(64))

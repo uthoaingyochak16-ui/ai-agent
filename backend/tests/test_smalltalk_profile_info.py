@@ -67,7 +67,7 @@ async def test_staff_adds_details_and_the_ai_does_not_overwrite_them(client, mak
     d = (await client.get(f"/api/profiles/{pid}", headers=admin)).json()
     facts = {f["key"]: f for f in d["facts"]}
     assert facts["district"]["group"] == "contact" and facts["district"]["source"] == "staff"
-    assert facts["blood_group"]["group"] == "other" and facts["blood_group"]["label"] == "Blood group"
+    assert facts["blood_group"]["group"] == "basic" and facts["blood_group"]["label"] == "Blood group"
     assert "Prefers calls" not in (d["summary"] or "")  # staff notes are never in the AI's summary
 
     async with maker() as s:  # the AI extracts something else later: staff's value wins, notes are staff-only

@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
+from app.rag.categories import CATEGORIES
 from app.models import Chunk, Conversation, Document, Message, QAPair
 from app.rag.documents import LocalStorage, chunk_sections, process_document
 from app.rag.embeddings import HashingEmbedder
@@ -108,7 +109,7 @@ async def test_qa_import_json_and_chunk_editing(client, admin, session, tmp_path
     r = await client.post("/api/qa-import", headers=admin, files=files)
     assert r.status_code == 200 and r.json()["created"] == 3
     items = (await client.get("/api/qa", headers=admin)).json()["items"]
-    assert {i["category"] for i in items} == {"শুরুর কথা", "খাদ্য", "ব্যায়াম"}
+    assert {i["category"] for i in items} <= set(CATEGORIES)  # free topics -> a standard category, guessed from the question
 
     monkeypatch.setattr("app.rag.documents.get_storage", lambda: LocalStorage(str(tmp_path)))
     d = await _doc(session, tmp_path)
@@ -200,3 +201,25 @@ def test_banglish_sound_keys_match_bangla_words():
         assert sound_key(latin) == sound_key(romanize(bangla)), (latin, bangla)
     km = build_keymap(["প্রেম", "পরম", "ইসলাম"])
     assert "প্রেম" in km[sound_key("prem")] and km[sound_key("islam")] == ["ইসলাম"]
+
+
+def test_short_answer_is_the_answer_and_classification_fields_are_hidden():
+    recs = [{"id": "qa_1", "topic": "প্রেম", "page": "13", "question_type": "definition", "question": "প্রেম কী?",
+             "keywords": "['প্রেম']", "short_answer": "প্রেম স্বর্গীয়।", "details_ref": "details_001"}]
+    sec = extract_sections(json.dumps(recs, ensure_ascii=False).encode(), "json")[0]
+    assert sec.title == "প্রেম কী?" and sec.text == "প্রেম স্বর্গীয়।" and sec.page == 13
+
+
+async def test_a_record_is_only_quoted_when_its_question_is_about_the_guests_words(session, tmp_path):
+    st = LocalStorage(str(tmp_path))
+    recs = [{"question": "আমার ছেলেকে কোয়ান্টাম মেথড কোর্স করিয়েছি, সে অস্থির। কী করব?", "answer": "আগে আপনাকে প্রশান্ত হতে হবে।"},
+            {"question": "কোয়ান্টাম ফাউন্ডেশন কী কী সেবা দেয়?", "answer": "রক্তদান, দাফন, ত্রাণ ও শিক্ষা সেবা।"}]
+    d = Document(title="qa", file_path=st.save("qa.json", json.dumps(recs, ensure_ascii=False).encode()), type="json")
+    session.add(d)
+    await session.commit()
+    await process_document(session, d.id, storage=st, embedder=EMB)
+    ask = lambda q: run_pipeline(session, get_llm_service(session), text=q, profile=None, conversation=None,  # noqa: E731
+                                 channel="messenger", persist=False, embedder=EMB)
+    assert "রক্তদান" in (await ask("Quantum Foundation ki ki saba prodhan kore thake?")).text
+    res = await ask("কোয়ান্টাম কোর্সের ভর্তি কবে?")      # neither record's question is about admission dates
+    assert "প্রশান্ত" not in res.text

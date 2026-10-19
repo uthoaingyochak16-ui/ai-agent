@@ -145,13 +145,18 @@ def sniff(data: bytes) -> str:
 # ---- per-format extractors -----------------------------------------------------------------------------
 # Column / key names that mark a Q&A-shaped record (any language the files are likely to use)
 _Q_KEYS = ("question", "questions", "q", "query", "prosno", "proshno", "prashna", "প্রশ্ন", "title", "heading", "topic_question")
-_A_KEYS = ("answer", "answers", "a", "answer_template", "reply", "response", "uttor", "uttar", "উত্তর", "content", "body", "text",
+_A_KEYS = ("answer", "answers", "short_answer", "long_answer", "detailed_answer", "full_answer", "a", "answer_template",
+           "reply", "response", "uttor", "uttar", "উত্তর", "content", "body", "text",
            "description", "details")
 
 
+# Fields that describe what a record is about: not part of the answer, but they go into the keyword index
+_INDEX_META_KEYS = {"topic", "category", "categories", "tags", "keywords", "keyword"}
+
 # Bookkeeping fields of a record: never part of the text a guest is shown
 _META_KEYS = {"id", "source", "sources", "url", "link", "links", "ref", "reference", "references", "image", "images",
-              "topic", "category", "categories", "tags", "created_at", "updated_at"}
+              "topic", "category", "categories", "tags", "created_at", "updated_at", "question_type", "type",
+              "keywords", "details_ref", "ref_id", "lang", "language"}
 
 
 def _pick(keys: list[str], wanted: tuple[str, ...]) -> str | None:
@@ -180,7 +185,9 @@ def _records_to_sections(records: list[dict], page_key: str | None = None) -> li
             continue
         page = r.get(pk) if pk else None
         page = int(page) if isinstance(page, (int, float)) or (isinstance(page, str) and page.isdigit()) else None
-        out.append((page, body or q, q or None))
+        meta = " ".join(str(v) for k, v in r.items() if str(k).strip().lower() in _INDEX_META_KEYS and str(v).strip()
+                        and not isinstance(v, dict)).strip()
+        out.append((page, body or q, q or None, meta or None))
     return out
 
 
@@ -242,7 +249,7 @@ def _xlsx(data: bytes):
             continue
         head, body = rows[0], rows[1:]
         if body and all(head):  # header row -> one section per row ("column: value"); Q&A rows keep the question
-            pages += [(i, t, q) for _, t, q in _records_to_sections([dict(zip(head, r)) for r in body])]
+            pages += [(i, t, q, m) for _, t, q, m in _records_to_sections([dict(zip(head, r)) for r in body])]
         else:
             pages.append((i, f"[{ws.title}]\n" + "\n".join(" | ".join(v for v in r if v) for r in rows)))
     return pages
@@ -359,7 +366,7 @@ def _zip(data: bytes, depth: int):
             except Exception as exc:  # noqa: BLE001 - one unreadable member must not sink the archive
                 logger.info("zip member %s skipped: %s", name, exc)
                 continue
-            pages += [(t[0], t[1], t[2] if len(t) > 2 else None) for t in inner if t[1].strip()]
+            pages += [(t[0], t[1], t[2] if len(t) > 2 else None, t[3] if len(t) > 3 else None) for t in inner if t[1].strip()]
     return pages
 
 
@@ -369,10 +376,11 @@ class Section:
     page: int | None
     text: str
     title: str | None = None  # e.g. the question of a Q&A record
+    meta: str | None = None   # topic / keywords the file gives for the record (keyword index only)
 
 
 def extract_sections(data: bytes, kind: str) -> list[Section]:
-    return [Section(t[0], t[1], t[2] if len(t) > 2 else None) for t in _extract(data, kind)]
+    return [Section(t[0], t[1], t[2] if len(t) > 2 else None, t[3] if len(t) > 3 else None) for t in _extract(data, kind)]
 
 
 def extract_pages(data: bytes, kind: str) -> list[tuple[int | None, str]]:

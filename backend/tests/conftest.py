@@ -1,15 +1,21 @@
 import os
 
+# The suite drops, recreates and truncates every table. It must NEVER see the app's own DATABASE_URL: inside the
+# backend container that variable points at the live database. Point the tests elsewhere with TEST_DATABASE_URL /
+# TEST_REDIS_URL; the test secrets always win over whatever .env put in the environment.
 os.environ.update(
     SECRET_KEY="test-secret-key-0123456789abcdef0123456789",
     ENCRYPTION_KEY="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
     HMAC_KEY="test-hmac-key-0123456789abcdef0123456789ab",
     META_APP_SECRET="testsecret",
     META_VERIFY_TOKEN="verify-me",
-    DATABASE_URL="postgresql+asyncpg://app:app@localhost:5432/assistant_test",
-    REDIS_URL="redis://localhost:6379/15",
+    DATABASE_URL=os.environ.get("TEST_DATABASE_URL", "postgresql+asyncpg://app:app@localhost:5432/assistant_test"),
+    REDIS_URL=os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/15"),
     DEFAULT_PHONE_REGION="BD",
 )
+if not os.environ["DATABASE_URL"].rsplit("/", 1)[-1].split("?")[0].endswith("_test"):
+    raise SystemExit(f"Refusing to run: test database name must end with '_test' (got {os.environ['DATABASE_URL']!r}). "
+                     "The tests wipe every table.")
 
 import asyncio
 from datetime import datetime, timezone
@@ -37,6 +43,7 @@ def schema():
         eng = create_async_engine(URL, poolclass=NullPool)
         async with eng.begin() as c:
             await c.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            await c.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
             await c.run_sync(Base.metadata.drop_all)
             await c.run_sync(Base.metadata.create_all)
         await eng.dispose()
@@ -74,6 +81,7 @@ class FakeRedis:
 class FakeQueue:
     def __init__(self):
         self.jobs: list[tuple] = []
+        self.options: list[dict] = []  # enqueue keyword options (e.g. _defer_by), parallel to jobs
         self.ids: set[str] = set()
 
     async def enqueue_job(self, name, *args, _job_id=None, **kw):
@@ -81,7 +89,24 @@ class FakeQueue:
             return None
         self.ids.add(_job_id)
         self.jobs.append((name, args))
+        self.options.append(kw)
         return object()
+
+
+@pytest.fixture(autouse=True)
+def _no_program_followup(monkeypatch):
+    """The program district follow-up adds a bubble after course questions; tests that cover it switch it on."""
+    from app.services.settings_service import DEFAULTS
+    monkeypatch.setitem(DEFAULTS, "program_followup_enabled", False)
+
+
+@pytest.fixture(autouse=True)
+def _code_behaviour_defaults(monkeypatch):
+    """app/defaults/messages_and_handover.json sets one deployment's switches (lead capture on, router on, its own system
+    prompt); the tests check the logic with the original code switches. Its texts and greeting words stay in use."""
+    from app.services.settings_service import CODE_BEHAVIOUR_DEFAULTS, DEFAULTS
+    for k, v in CODE_BEHAVIOUR_DEFAULTS.items():
+        monkeypatch.setitem(DEFAULTS, k, v)
 
 
 @pytest.fixture(autouse=True)

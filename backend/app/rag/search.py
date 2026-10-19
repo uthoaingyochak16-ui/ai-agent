@@ -10,36 +10,43 @@ appear in it, its record question closely matches, or its vector similarity reac
 from __future__ import annotations
 
 import math
+import logging
 import re
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
-from sqlalchemy import select
+from sqlalchemy import literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Chunk, Document
+from app.rag.embeddings import embedding_signature
 from app.rag.translit import build_keymap, sound_key
+from app.rag.rerank import rerank_texts
 from app.services.settings_service import get_setting
+
+logger = logging.getLogger(__name__)
 
 # Words that carry no topic ("what is the ...", "কি", "কী", "কেন"); kept short on purpose.
 STOPWORDS = {
     "a", "an", "the", "is", "are", "was", "were", "be", "to", "of", "in", "on", "for", "and", "or", "with", "it", "this",
     "that", "what", "which", "who", "how", "why", "when", "where", "do", "does", "did", "can", "could", "i", "you", "we",
     "me", "my", "your", "our", "please", "tell", "about", "any", "there", "have", "has", "will", "would", "should",
-    "ki", "koto", "kivabe", "keno", "kothay", "kobe", "ache", "ase", "achhe", "hobe", "hoy", "er", "ar", "ta", "ti",
+    "ki", "koto", "kivabe", "keno", "kothay", "kothai", "kothae", "kuthay", "kotai", "kobe", "ache", "ase", "achhe", "hobe", "hoy", "er", "ar", "ta", "ti",
     "niya", "niye", "nia", "kaj", "kaaj",
     "na", "ami", "apni", "amar", "apnar", "tumi", "ei", "oi", "jodi", "bolen", "bolun", "janate", "jante", "chai",
     "কি", "কী", "কে", "কেন", "কোথায়", "কখন", "কিভাবে", "কীভাবে", "কত", "এর", "ও", "এবং", "আর", "বা", "এই", "সেই", "এটা",
     "ওই", "যে", "যা", "তা", "না", "হয়", "হবে", "হয়েছে", "আছে", "ছিল", "করে", "করা", "করতে", "কোনো", "কোন", "আমি", "আপনি",
-    "আমার", "আপনার", "আমাদের", "তুমি", "জানতে", "চাই", "বলুন", "দয়া", "করে", "সত্যিই", "নিয়ে", "জন্য", "থেকে", "দিয়ে",
+    "আমার", "আপনার", "আমাদের", "তুমি", "জানতে", "চাই", "বলুন", "দয়া", "করে", "সত্যিই", "নিয়ে", "জন্য", "jonno", "jnno", "jonne", "hote", "hobo", "lage", "lagey", "থেকে", "দিয়ে",
 }
 STOPWORDS |= {"করব", "করবো", "করবেন", "করি", "হবো", "হব", "যাবে", "যাবো", "যায়", "পারবো", "পারব", "পারবে", "পারবেন",
               "দিবো", "দেব", "দিতে", "নেব", "নিতে", "পাবো", "পাব", "পাবেন", "পাওয়া", "den", "din", "dao", "diben", "deben", "dibe", "janaben", "janan",
               "dorkar", "lagbe", "দিন", "দেন", "দাও", "দিবেন", "জানাবেন", "জানান", "দরকার", "kora", "kore", "korle", "korben", "korte",
               "hole", "hoile", "hoye", "thik", "ache", "acche", "achhe", "many", "much", "does", "is", "are", "the", "a",
-              "e", "te", "er", "ta", "ti", "to", "for", "of", "kemne", "kibhabe", "kivabe", "kno", "keno", "jodi", "আপনাদের", "ধরনের", "কয়", "কেমন", "উচিত", "লাগবে", "kore", "korbo"}
+              "e", "te", "er", "ta", "ti", "to", "for", "of", "kemne", "kibhabe", "kivabe", "kno", "keno", "jodi",
+              "thake", "thaken", "thaka", "kora", "korechen", "dey", "den", "থাকে", "থাকেন", "দেয়", "দেন",
+              "prodhan", "prodan", "provide", "provides", "প্রদান", "ছিলেন", "ছিলো", "হয়েছিলেন", "হলেন", "হন", "আপনাদের", "ধরনের", "কয়", "কেমন", "উচিত", "লাগবে", "kore", "korbo"}
 
 # Same meaning, different words / scripts: an English or Banglish question still finds the Bangla text, and
 # "ভর্তি" finds "রেজিস্ট্রেশন". Kept to the organisation's own vocabulary; extend as new questions show up.
@@ -52,15 +59,25 @@ SYNONYMS: list[set[str]] = [
     {"blood", "rokto", "রক্ত", "রক্তদান"}, {"donate", "donation", "donor", "dan", "দান", "অনুদান", "দাতা"},
     {"zakat", "যাকাত"}, {"school", "college", "স্কুল", "কলেজ", "বিদ্যালয়"}, {"cosmo", "কসমো"},
     {"branch", "branches", "center", "centre", "shakha", "sakha", "শাখা", "সেন্টার", "সেল"},
-    {"address", "location", "thikana", "ঠিকানা", "অবস্থান"}, {"office", "অফিস", "দফতর", "কার্যালয়"},
+    {"address", "location", "thikana", "ঠিকানা", "অবস্থান", "লোকেশন", "lokeshon", "place", "স্থান", "jayga", "jaiga", "জায়গা"}, {"office", "অফিস", "দফতর", "কার্যালয়"},
     {"phone", "mobile", "contact", "number", "ফোন", "মোবাইল", "যোগাযোগ", "নম্বর"},
-    {"register", "registration", "admission", "admit", "enroll", "join", "bhorti", "vorti", "ভর্তি", "রেজিস্ট্রেশন", "নিবন্ধন"},
+    {"register", "registration", "admission", "admit", "enroll", "join", "bhorti", "vorti", "ভর্তি", "রেজিস্ট্রেশন", "নিবন্ধন",
+     "apply", "application", "abedon", "আবেদন", "যোগদান"},
+    {"requirement", "requirements", "eligibility", "eligible", "qualification", "joggota", "jogyota", "যোগ্যতা",
+     "প্রয়োজনীয়তা"},
+    {"language", "bhasha", "vasha", "basha", "ভাষা", "ভাষায়"},
     {"founder", "guruji", "প্রতিষ্ঠাতা", "গুরুজী", "গুরুজি", "মহাজাতক"}, {"app", "অ্যাপ", "এপ"},
     {"burial", "funeral", "dafon", "দাফন", "সৎকার"}, {"age", "boyosh", "বয়স"},
     {"benefit", "benefits", "upokar", "উপকার", "উপকারিতা", "লাভ"}, {"religion", "ধর্ম", "ধর্মের"},
     {"schedule", "batch", "next", "upcoming", "ব্যাচ", "পরবর্তী", "আসন্ন", "সময়সূচি", "তারিখ"},
     {"teach", "taught", "learn", "shekhay", "shikhte", "শেখানো", "শেখা", "শিখতে", "শেখায়"},
     {"what", "ki", "কী", "কি"},  # removed as stopwords anyway; listed so they never become "unknown rare words"
+    {"service", "services", "seba", "sheba", "saba", "sebamulok", "সেবা", "সেবামূলক", "সেবাসমূহ"},
+    {"provide", "provides", "offer", "prodhan", "prodan", "প্রদান"}, {"activity", "activities", "karjokrom", "কার্যক্রম"},
+    {"dhaka", "dacca", "ঢাকা"}, {"khulna", "খুলনা"}, {"jessore", "jashore", "jossor", "যশোর"},
+    {"chattogram", "chittagong", "chottogram", "চট্টগ্রাম"}, {"rajshahi", "রাজশাহী"}, {"sylhet", "sileth", "সিলেট"},
+    {"rangpur", "রংপুর"}, {"barishal", "barisal", "বরিশাল"}, {"mymensingh", "ময়মনসিংহ"}, {"cumilla", "comilla", "কুমিল্লা"},
+    {"bogura", "bogra", "বগুড়া"}, {"gazipur", "গাজীপুর"}, {"narayanganj", "নারায়ণগঞ্জ"},
     {"day", "days", "din", "দিন", "দিনের", "দিনব্যাপী"}, {"love", "prem", "valobasa", "bhalobasa", "প্রেম", "ভালবাসা", "ভালোবাসা"},
     {"marriage", "marry", "wedding", "biye", "bie", "বিয়ে", "বিবাহ"}, {"friend", "friendship", "bondhu", "বন্ধু", "বন্ধুত্ব"},
     {"breakup", "separation", "সম্পর্কচ্ছেদ", "বিচ্ছেদ"}, {"relationship", "somporko", "shomporko", "সম্পর্ক"},
@@ -99,6 +116,7 @@ def _bangla_of(word: str) -> str:
     return next((w for w in sorted(_alternatives(word)) if any("ঀ" <= c <= "৿" for c in w)), word)
 
 
+RECORD_QUESTION_MIN = 0.6  # share of the guest's (weighted) words that a quoted record's question must contain
 _SPLIT_SENTENCES = re.compile(r"(?<=[।!?.])\s+|\n+")
 _HEAD = re.compile(r"^(?:প্রশ্ন|Question): .*?\n(?:উত্তর|Answer): ", re.DOTALL)
 
@@ -235,6 +253,8 @@ class Hit:
     total: int
     question_sim: float
     weighted: float = 0.0  # share of the question's meaning (IDF-weighted words) found in the chunk
+    rerank: float | None = None
+    text: str | None = None   # full record text for the prompt (keyword search joins a Q&A record's chunks); default: chunk.content
 
 
 def weighted_coverage(query_words: list[str], text: str, idf: dict[str, float], unknown: float) -> float:
@@ -247,11 +267,14 @@ def weighted_coverage(query_words: list[str], text: str, idf: dict[str, float], 
     return sum(weight[w] for w in uniq if _matches(w, words)) / total if total else 0.0
 
 
-async def hybrid_search(session: AsyncSession, query: str, qvec: list[float], *, top_k: int,
+async def hybrid_search(session: AsyncSession, query: str, qvec: list[float] | None, *, top_k: int,
                         min_similarity: float) -> list[Hit]:
+    """`qvec` None (the embedding provider is down): words only."""
+    version = await embedding_signature(session)
     vec_rows = (await session.execute(
         select(Chunk.id, Chunk.embedding.cosine_distance(qvec).label("d")).join(Document, Chunk.document_id == Document.id)
-        .where(Document.status == "ready").order_by("d").limit(40))).all()
+        .where(Document.status == "ready", Chunk.embedding_version == version).order_by("d").limit(40))).all() \
+        if qvec is not None else []
     index = await lexical_index(session)
     lex = index.search(query, 40)
     unknown = max(index.idf.values(), default=1.0)  # a word no document contains is as telling as the rarest one
@@ -259,8 +282,8 @@ async def hybrid_search(session: AsyncSession, query: str, qvec: list[float], *,
     if not ids:
         return []
     rows = (await session.execute(
-        select(Chunk, Document, Chunk.embedding.cosine_distance(qvec).label("d")).join(Document, Chunk.document_id == Document.id)
-        .where(Chunk.id.in_(ids)))).all()
+        select(Chunk, Document, (Chunk.embedding.cosine_distance(qvec) if qvec is not None else literal(1.0)).label("d"))
+        .join(Document, Chunk.document_id == Document.id).where(Chunk.id.in_(ids)))).all()
     lex_max = max((s for _, s in lex), default=0.0) or 1.0
     lex_by_id = dict(lex)
     qwords = content_words(query)
@@ -284,6 +307,22 @@ async def hybrid_search(session: AsyncSession, query: str, qvec: list[float], *,
                  + (0.3 if qsim >= 0.8 and wcov >= 0.5 else 0.15 if qsim >= 0.65 and wcov >= 0.5 else 0.0))
         hits.append(Hit(c, d, round(score, 4), round(vec, 4), round(lx, 4), matched, total, round(qsim, 3), round(wcov, 3)))
     hits.sort(key=lambda h: -h.score)
+    provider = await get_setting(session, "rerank_provider") or "none"
+    if provider != "none" and hits:
+        candidates = hits[:max(1, int(await get_setting(session, "rerank_candidates") or 20))]
+        try:
+            ranked, minimum = await rerank_texts(session, query, [h.chunk.content for h in candidates])
+            if ranked is not None:
+                by_index = {index: score for index, score in ranked if 0 <= index < len(candidates)}
+                reranked = []
+                for index, hit in enumerate(candidates):
+                    if index in by_index and by_index[index] >= minimum:
+                        hit.rerank = round(by_index[index], 4)
+                        hit.score = hit.rerank
+                        reranked.append(hit)
+                hits = sorted(reranked, key=lambda h: -h.score)
+        except Exception as exc:  # retrieval must remain available when an optional provider is down
+            logger.warning("reranker failed; using hybrid scores: %s", exc)
     return hits[:top_k]
 
 
@@ -316,10 +355,23 @@ async def extractive_answer(session: AsyncSession, query: str, hits: list[Hit], 
     if top.weighted < 0.55 and not (top.question_sim >= 0.75 and top.weighted >= 0.35):
         return None  # the important words of the question are not in the text: don't guess
     if top.chunk.question:
-        # a Q&A record answers this: give that one record's answer, never sentences stitched from different records
-        parts = (await session.execute(select(Chunk.content).where(
-            Chunk.document_id == top.chunk.document_id, Chunk.question == top.chunk.question).order_by(Chunk.position))).scalars().all()
-        return shorten(_dedupe_overlap([strip_head(p) for p in parts]), max_chars)
+        # a Q&A record answers this: give one record's answer, never sentences stitched from different records - and
+        # only a record whose own question covers the guest's words ("Quantum Foundation services" must not get a
+        # parenting answer that merely mentions Quantum)
+        index = await lexical_index(session)
+        unknown = max(index.idf.values(), default=1.0)
+        qwords = content_words(query)
+        for h in hits:
+            if not h.chunk.question:
+                continue
+            if weighted_coverage(qwords, h.chunk.question, index.idf, unknown) < RECORD_QUESTION_MIN \
+                    and h.question_sim < 0.75:
+                continue
+            parts = (await session.execute(select(Chunk.content).where(
+                Chunk.document_id == h.chunk.document_id, Chunk.question == h.chunk.question).order_by(Chunk.position))).scalars().all()
+            return shorten(_dedupe_overlap([strip_head(p) for p in parts]), max_chars)
+        if all(h.chunk.question for h in hits):
+            return None  # every candidate is a record about something else: say "don't know" instead
     qwords = list(dict.fromkeys(content_words(query)))
     # rare words decide what the question is about ("ডিম" matters more than "হার্ট ক্লাব", which is everywhere)
     idf = (await lexical_index(session)).idf

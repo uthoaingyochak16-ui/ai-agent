@@ -13,8 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import admin_only, any_staff
 from app.core import crypto
 from app.db.session import get_session
-from app.models import (AdminUser, ChannelIdentity, Conversation, Message, Profile, ProfileFact, ProfileMergeLog)
+from app.models import (AdminUser, ChannelIdentity, Conversation, FamilyMember, Message, Profile, ProfileFact,
+                        ProfileMergeLog)
 from app.services import consent as C
+from app.services import family as family_svc
 from app.services.contacts import normalize_email, normalize_phone
 from app.services.merge import MergeError, merge_profiles, unmerge_profiles
 from app.services.post_reply import refresh_profile_summary
@@ -240,6 +242,8 @@ async def get_profile(pid: int, user: AdminUser = Depends(any_staff), session: A
                          "source": f.source or ("ai" if f.source_message_id else None), **describe(f.key)}
                         for f in facts if not f.key.startswith(("pending_", "merge_"))],
               "pending_fields": [f.key[8:] for f in facts if f.key.startswith("pending_")],
+              "family": [family_svc.as_dict(m) for m in (await session.execute(select(FamilyMember).where(
+                  FamilyMember.profile_id == pid).order_by(FamilyMember.id))).scalars()],
               "merge_suggestion": next((int(f.value) for f in facts if f.key == "merge_suggestion"), None),
               "conversations": [{"id": c.id, "channel_identity_id": c.channel_identity_id, "status": c.status, "ai_paused": c.ai_paused,
                                  "last_message_at": c.last_message_at} for c in convs],
@@ -294,6 +298,54 @@ async def delete_fact(pid: int, key: str, _: AdminUser = Depends(any_staff), ses
                                                                ~ProfileFact.key.like(r"merge\_%", escape="\\")))
     p.summary_dirty = True
     await refresh_profile_summary(session, p)
+    await session.commit()
+    return {"ok": True}
+
+
+class FamilyIn(BaseModel):
+    relation: str = Field(min_length=2, max_length=40)
+    name: str | None = Field(None, max_length=160)
+    age: int | None = Field(None, ge=0, le=120)
+    blood_group: str | None = Field(None, max_length=8)
+    details: dict[str, str] = Field(default_factory=dict)
+
+
+@router.put("/{pid}/family")
+@router.put("/{pid}/family/{fid}")
+async def put_family(pid: int, body: FamilyIn, fid: int | None = None, _: AdminUser = Depends(any_staff),
+                     session: AsyncSession = Depends(get_session)):
+    """Staff adds a relative, or corrects one (the values given replace the AI's)."""
+    p = await _get(session, pid)
+    if p.merged_into_id or p.erased_at:
+        raise HTTPException(409, "Profile is merged or erased")
+    relation = family_svc.relation_of(body.relation)
+    bg = family_svc.blood_group(body.blood_group) if body.blood_group else None
+    if not relation or (body.blood_group and not bg):
+        raise HTTPException(422, "Check the relation and the blood group (A+, B-, O+ ...)")
+    details = {re.sub(r"[^a-z0-9]+", "_", k.lower()).strip("_"): v.strip()[:200] for k, v in body.details.items() if v.strip()}
+    if any(C._looks_sensitive(k, v) for k, v in details.items()):
+        raise HTTPException(422, "This value can't be saved (sensitive data such as card numbers or passwords is blocked)")
+    if fid is None:
+        m = FamilyMember(profile_id=pid)
+        session.add(m)
+    else:
+        m = await session.get(FamilyMember, fid)
+        if m is None or m.profile_id != pid:
+            raise HTTPException(404, "Not found")
+    m.relation, m.name, m.age, m.blood_group, m.details, m.source = (
+        relation, (body.name or "").strip() or None, body.age, bg, details, "staff")
+    p.summary_dirty = True
+    await session.flush()
+    await refresh_profile_summary(session, p)
+    await session.commit()
+    return family_svc.as_dict(m)
+
+
+@router.delete("/{pid}/family/{fid}")
+async def delete_family(pid: int, fid: int, _: AdminUser = Depends(any_staff), session: AsyncSession = Depends(get_session)):
+    p = await _get(session, pid)
+    await session.execute(FamilyMember.__table__.delete().where(FamilyMember.id == fid, FamilyMember.profile_id == pid))
+    p.summary_dirty = True
     await session.commit()
     return {"ok": True}
 

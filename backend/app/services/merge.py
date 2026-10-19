@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import ChannelIdentity, Conversation, Profile, ProfileFact, ProfileMergeLog
+from app.models import ChannelIdentity, Conversation, FamilyMember, Profile, ProfileFact, ProfileMergeLog
 
 SCALARS = ("name", "location", "age", "profession", "language")
 SECRETS = {"phone": ("phone_hash", "phone_enc"), "email": ("email_hash", "email_enc")}
@@ -92,6 +92,11 @@ async def merge_profiles(session: AsyncSession, keep_id: int, merge_id: int, *, 
                                                  "old_confidence": kf.confidence, "new_value": mf.value}
             kf.value, kf.confidence = mf.value, mf.confidence
 
+    # relatives follow the profile (two "mother" rows can be tidied up by staff)
+    fids = (await session.execute(select(FamilyMember.id).where(FamilyMember.profile_id == merge_id))).scalars().all()
+    snap["moved_family_ids"] = list(fids)
+    await session.execute(update(FamilyMember).where(FamilyMember.profile_id == merge_id).values(profile_id=keep_id))
+
     mrg.merged_into_id = keep_id
     keep.summary_dirty = True
     log = ProfileMergeLog(kept_profile_id=keep_id, merged_profile_id=merge_id, snapshot=snap, reason=reason, actor=actor)
@@ -120,6 +125,8 @@ async def unmerge_profiles(session: AsyncSession, log_id: int, *, actor: str = "
                           Conversation.profile_id == keep.id).values(profile_id=mrg.id))
     await session.execute(update(ProfileFact).where(ProfileFact.id.in_(snap["moved_fact_ids"] or [0]),
                           ProfileFact.profile_id == keep.id).values(profile_id=mrg.id))
+    await session.execute(update(FamilyMember).where(FamilyMember.id.in_(snap.get("moved_family_ids") or [0]),
+                          FamilyMember.profile_id == keep.id).values(profile_id=mrg.id))
     for key, o in snap["overwritten_facts"].items():
         fact = await session.get(ProfileFact, o["fact_id"])
         if fact and fact.profile_id == keep.id and fact.value == o["new_value"]:

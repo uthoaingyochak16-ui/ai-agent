@@ -8,7 +8,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import crypto
-from app.models import ChannelIdentity, Conversation, Message, Profile, ProfileFact, ProfileMergeLog
+from app.models import ChannelIdentity, Conversation, FamilyMember, Message, Profile, ProfileFact, ProfileMergeLog
 from app.privacy.patterns import digits_only, luhn_ok
 
 _YES = {"yes", "y", "yep", "yeah", "ok", "okay", "sure", "agree", "agreed", "haan", "ha", "ji", "hya", "hyan",
@@ -16,7 +16,9 @@ _YES = {"yes", "y", "yep", "yeah", "ok", "okay", "sure", "agree", "agreed", "haa
 _NO = {"no", "n", "nope", "nah", "না", "না।", "লাগবে না", "দরকার নেই", "no thanks", "dont", "don't", "na", "nai"}
 _ERASE_RE = re.compile(
     r"(?i)(delete|erase|remove|forget)\s+(all\s+)?(my\s+)?(personal\s+)?(data|info|information|details|me)\b|"
-    r"আমার\s+(তথ্য|ডাটা|ডেটা)\s*(মুছে|ডিলিট|delete)|তথ্য\s+মুছে\s+(ফেল|দিন|দাও)|ডেটা\s+ডিলিট")
+    r"আমার\s+(তথ্য|ডাটা|ডেটা)\s*(মুছে|ডিলিট|delete)|তথ্য\s+মুছে\s+(ফেল|দিন|দাও)|ডেটা\s+ডিলিট|"
+    r"(?i:\b(amar|amr|my)\s+(sob\s+|shob\s+|all\s+)?(personal\s+)?(data|tottho|totho|info|details)\s+"
+    r"(muche|muchhe|mucha|muse|delete|remove|erase|clear)\s*(kore\s+)?(din|dao|den|felun|fel|felen|koren|korun|please)?\b)")
 
 PERSONAL_SCALARS = ("name", "location", "age", "profession", "language")
 CONTACT_FIELDS = ("phone", "email")
@@ -137,6 +139,8 @@ def _valid_scalar(key: str, value) -> object | None:
 def _looks_sensitive(key: str, value: str) -> bool:
     if any(part in key.lower() for part in _BLOCKED_KEY_PARTS):
         return True
+    if key in CONTACT_FIELDS:  # validated as a phone/email below; a 13-digit +880 number can pass the card checksum
+        return False
     d = digits_only(value)
     return 13 <= len(d) <= 19 and luhn_ok(d)
 
@@ -194,6 +198,7 @@ async def erase_profile(session: AsyncSession, profile_id: int) -> None:
     ids = await _tree_ids(session, profile_id)
     now = datetime.now(timezone.utc)
     await session.execute(delete(ProfileFact).where(ProfileFact.profile_id.in_(ids)))
+    await session.execute(delete(FamilyMember).where(FamilyMember.profile_id.in_(ids)))
     await session.execute(delete(ProfileMergeLog).where(
         (ProfileMergeLog.kept_profile_id.in_(ids)) | (ProfileMergeLog.merged_profile_id.in_(ids))))
     await session.execute(update(Message).where(Message.conversation_id.in_(

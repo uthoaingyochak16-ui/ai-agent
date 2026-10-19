@@ -25,6 +25,7 @@ from app.core import crypto
 from app.models import ChannelIdentity, Conversation, Profile, ProfileFact
 from app.rag.search import norm
 from app.services import consent as consent_svc
+from app.services import contact_owner
 from app.services.contacts import extract_emails, extract_phones, normalize_phone
 from app.services.merge import MergeError, merge_profiles
 from app.services.settings_service import get_setting
@@ -42,6 +43,12 @@ class Resolved:
     debug: dict | None = None   # pipeline debug of the reply (Test Chat)
     post: dict | None = None    # post-reply extraction/summary results
     prev_user_message_at: datetime | None = None  # this identity's previous message, before the current one
+    reply_prefix: str = ""  # lead capture: put around the next reply ("thanks" / "we also need ..."), used once
+    reply_suffix: str = ""
+    notice: str = ""        # e.g. the card warning: put first in the next reply, used once
+    turn_text: str = ""     # what the guest wrote this turn (a whole burst), for guest-info collection
+    followups: list[str] = field(default_factory=list)  # extra short bubbles sent after the next reply, used once
+    qtype: str | None = None  # question type of this turn (services/reply_style.py)
 
 
 async def _active(session: AsyncSession, profile_id: int) -> Profile:
@@ -62,6 +69,8 @@ async def resolve(session: AsyncSession, msg: IncomingMessage) -> Resolved:
     ident = (await session.execute(select(ChannelIdentity).where(
         ChannelIdentity.channel == msg.channel, ChannelIdentity.external_id == msg.external_user_id)
         .with_for_update())).scalar_one()
+    if msg.recipient_id and ident.account_id != str(msg.recipient_id):  # the Page / number they wrote to this time
+        ident.account_id = str(msg.recipient_id)
     events: list[str] = []
 
     pending_suggestion: int | None = None
@@ -134,40 +143,71 @@ async def _find_owner_of(session: AsyncSession, kind: str, value: str, exclude_i
 
 
 async def handle_shared_contacts(session: AsyncSession, r: Resolved, text: str) -> None:
-    """If the user shared a phone/email: link/merge with the profile that owns it, otherwise save it
-    (or hold it encrypted until consent)."""
+    """A phone/email in the message: only the guest's OWN is linked/merged/saved (contact_owner). A relative's goes on
+    that relative, our own office's or anyone else's is ignored, and an unclear one is left to the AI
+    (post_reply.collect_guest_info) unless we had just asked for their number."""
+    from app.services import family as family_svc  # local import avoids a cycle
+    expected = r.conversation.lead_awaiting_at is not None or contact_owner.mostly_contact(text)
+    done: set[str] = set()
+    for kind, value, who in await contact_owner.owners(session, text):
+        if who.kind == "self" or (who.kind == "unknown" and expected):
+            if kind not in done:  # one own phone / email per message
+                done.add(kind)
+                await save_own_contact(session, r, kind, value)
+        elif who.kind == "family" and (relation := contact_owner.relation_en(who.relation)):
+            status = await family_svc.upsert(session, r.profile, {"relation": relation, "details": {kind: value}})
+            r.events.append(f"{kind} of the guest's {relation}: {status}")
+        else:
+            r.events.append(f"{kind} not the guest's ({who.kind}{': left to the AI' if who.kind == 'unknown' else ''})")
+
+
+async def save_own_contact(session: AsyncSession, r: Resolved, kind: str, value: str) -> None:
+    """The guest's own phone/email: link/merge with the profile that owns it, otherwise save it (or hold it
+    encrypted until consent)."""
     policy = await get_setting(session, "merge_policy")
-    for kind, values in (("phone", extract_phones(text)), ("email", extract_emails(text))):
-        if not values:
-            continue
-        value = values[0]
-        owner = await _find_owner_of(session, kind, value, r.profile.id)
-        await remember_contact(session, r.profile.id, kind, value)
-        if owner is not None:
-            same = _same_name(await _names(session, r.profile.id), await _names(session, owner.id))
-            if policy == "suggest" and not same:
-                await suggest_merge(session, r.profile.id, owner.id)
-                r.events.append(f"merge suggested with profile {owner.id}")
-                continue
-            try:
-                await merge_profiles(session, keep_id=owner.id, merge_id=r.profile.id,
-                                     actor="system", reason=f"shared_{kind}")
-            except MergeError as exc:
-                logger.warning("auto-merge skipped: %s", exc)
-                continue
-            r.profile = await _active(session, owner.id)
-            r.conversation.profile_id = r.profile.id
-            r.events.append(f"merged into profile {owner.id} via shared {kind}")
-            if r.profile.consent_given and (kind == "phone" and not r.profile.phone_hash or
-                                            kind == "email" and not r.profile.email_hash):
-                await consent_svc.apply_field(session, r.profile, kind, value)
-            continue
-        if r.profile.consent_given:
+    owner = await _find_owner_of(session, kind, value, r.profile.id)
+    await remember_contact(session, r.profile.id, kind, value)
+    if owner is not None:
+        same = _same_name(await _names(session, r.profile.id), await _names(session, owner.id))
+        if policy == "suggest" and not same:
+            await suggest_merge(session, r.profile.id, owner.id)
+            r.events.append(f"merge suggested with profile {owner.id}")
+            return
+        try:
+            await merge_profiles(session, keep_id=owner.id, merge_id=r.profile.id,
+                                 actor="system", reason=f"shared_{kind}")
+        except MergeError as exc:
+            logger.warning("auto-merge skipped: %s", exc)
+            return
+        r.profile = await _active(session, owner.id)
+        r.conversation.profile_id = r.profile.id
+        r.events.append(f"merged into profile {owner.id} via shared {kind}")
+        if r.profile.consent_given and (kind == "phone" and not r.profile.phone_hash or
+                                        kind == "email" and not r.profile.email_hash):
             await consent_svc.apply_field(session, r.profile, kind, value)
-            r.events.append(f"saved {kind}")
-        elif r.profile.consent_at is None:  # not declined -> hold encrypted until consent
-            await consent_svc.stash_pending(session, r.profile, kind, value)
-            r.events.append(f"held {kind} pending consent")
+        return
+    if r.profile.consent_given:
+        await consent_svc.apply_field(session, r.profile, kind, value)
+        r.events.append(f"saved {kind}")
+    elif r.profile.consent_at is None:  # not declined -> hold encrypted until consent
+        await consent_svc.stash_pending(session, r.profile, kind, value)
+        r.events.append(f"held {kind} pending consent")
+
+
+async def save_contact_from_ai(session: AsyncSession, profile: Profile, kind: str, value: str) -> str:
+    """The AI decided an unclear number is the guest's own: save it, but never merge on the AI's word alone
+    (another profile with it only gets a merge suggestion for staff)."""
+    owner = await _find_owner_of(session, kind, value, profile.id)
+    await remember_contact(session, profile.id, kind, value)
+    if owner is not None:
+        await suggest_merge(session, profile.id, owner.id)
+        return "merge suggested"
+    if profile.consent_given:
+        return await consent_svc.apply_field(session, profile, kind, value)
+    if profile.consent_at is None:
+        await consent_svc.stash_pending(session, profile, kind, value)
+        return "pending"
+    return "rejected"
 
 
 # ---- one guest = one profile --------------------------------------------------------------------------------

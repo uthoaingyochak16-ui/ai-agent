@@ -13,7 +13,7 @@ class FakeLLM:
         outer = self
 
         class P:
-            async def generate(self, req, *, model, max_tokens, temperature):
+            async def generate(self, req, *, model, max_tokens, temperature, tools=None):
                 outer.calls.append((model, req))
                 r = outer.script.get(model, "ok")
                 text = r(req) if callable(r) else r

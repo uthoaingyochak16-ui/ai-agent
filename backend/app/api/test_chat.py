@@ -17,6 +17,8 @@ from app.llm.service import LLMService
 from app.models import AdminUser, ChannelIdentity, Conversation, Message, Profile
 from app.privacy.summary import PlainFormatter, compose_summary, missing_fields
 from app.services import consent as C
+from app.services import inspector
+from app.services.reply_style import classify
 from app.services.identity import resolve
 from app.services.ingest import handle_message
 from app.services.outbound import TEST_PREFIX
@@ -66,6 +68,14 @@ async def _run(s: AsyncSession, body: TestChatIn, llm: LLMService) -> dict:
     debug = dict(r.debug or {})
     debug.setdefault("path", "handover" if r.conversation.ai_paused else "none")
     debug["events"], debug["post_reply"] = r.events, r.post
+    if "inspector" not in debug:  # canned, lead, handover, district... replies: inspect them the same way
+        replies = [m.content_redacted for m in new if m.role == "assistant"]
+        main = next((m.content_redacted for m in new if m.role == "assistant" and (m.sources_json or {}).get("path") != "followup"), "")
+        follow = [m.content_redacted for m in new if m.role == "assistant" and (m.sources_json or {}).get("path") == "followup"]
+        facts = [x for x in prof["summary"].split("; ") if x] + (["phone: on file"] if view.has_phone else [])
+        debug["inspector"] = inspector.build(question=body.message, debug=debug, reply=main if replies else "",
+                                             qtype=r.qtype or classify(body.message, debug.get("path"), debug),
+                                             profile_facts=facts, followups=follow, paused=r.conversation.ai_paused)
     return {"session_id": sid, "conversation_id": None if body.no_save else r.conversation.id, "ai_paused": r.conversation.ai_paused,
             "handover_reason": r.conversation.handover_reason,
             "messages": [{"role": m.role, "content": m.content_redacted if m.role != "assistant" else m.content_redacted,

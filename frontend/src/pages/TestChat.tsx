@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, Send, ShieldCheck, ThumbsDown, User as UserIcon, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Badge, Button, Empty, ErrorNote, Field, Input, Meter, Modal, PageHeader, Panel, Select, Switch, Textarea, useToast, cx } from "../components/ui";
+import { Badge, Button, Empty, ErrorNote, Field, Input, Meter, Modal, PageHeader, Panel, Select, Switch, Tabs, Textarea, useToast, cx } from "../components/ui";
+import ReplyInspector from "../components/ReplyInspector";
+import TeachTab from "./TeachTab";
 import { api } from "../lib/api";
 import { num, usd } from "../lib/format";
 
-type Turn = { id: number; role: "user" | "assistant"; content: string; debug?: any; delivery?: string; paused?: boolean; profile?: any };
+type Turn = { id: number; role: "user" | "assistant"; content: string; debug?: any; delivery?: string; paused?: boolean; profile?: any; followup?: boolean };
 const PATH: Record<string, { label: string; tone: "ok" | "blue" | "warn" | "danger" | "neutral"; note: string }> = {
   qa_shortcut: { label: "Q&A shortcut", tone: "ok", note: "Answered from your Q&A table. No AI call, no cost." },
   cache: { label: "Semantic cache", tone: "ok", note: "A very similar question was answered recently. No AI call, no cost." },
@@ -20,6 +22,19 @@ let seq = 1;
 const newSession = () => Math.random().toString(36).slice(2, 12);
 
 export default function TestChat() {
+  const [tab, setTab] = useState<"chat" | "teach">("chat");
+  return (
+    <>
+      <PageHeader title="Test chat" subtitle={tab === "chat" ? "Talk to the assistant exactly as a customer would. Nothing is sent to Meta. Select any reply to inspect how it was produced." : "Tell the assistant in your own words how it should behave. It turns that into rules; nothing changes until you save one."} />
+      <Tabs<"chat" | "teach"> value={tab} onChange={setTab} tabs={[{ id: "chat", label: "Customer chat" }, { id: "teach", label: "Teach the assistant" }]} />
+      {/* both stay mounted, so switching tabs keeps each conversation */}
+      <div hidden={tab !== "chat"}><CustomerChat /></div>
+      <div hidden={tab !== "teach"}><TeachTab /></div>
+    </>
+  );
+}
+
+function CustomerChat() {
   const toast = useToast();
   const [channel, setChannel] = useState("messenger");
   const [profileId, setProfileId] = useState("");
@@ -29,6 +44,9 @@ export default function TestChat() {
   const [sel, setSel] = useState<number | null>(null);
   const [text, setText] = useState("");
   const [fix, setFix] = useState<{ q: string; a: string } | null>(null);
+  // a reply marked wrong is never served again from the shared answer cache
+  const markWrong = (answer: string) => api<{ blocked: number }>("/api/cache/feedback", { body: { answer } })
+    .then((r) => { if (r.blocked) toast(`${r.blocked} cached copy of this answer blocked`); }).catch(() => {});
   const end = useRef<HTMLDivElement>(null);
   const profiles = useQuery({ queryKey: ["profiles-select"], queryFn: () => api("/api/profiles", { params: { limit: 100 } }) });
   useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [turns.length]);
@@ -37,10 +55,10 @@ export default function TestChat() {
   const send = useMutation({
     mutationFn: (message: string) => api("/api/test-chat", { body: { message, channel, session_id: sid, profile_id: profileId ? +profileId : null, no_save: noSave, history: noSave ? turns.map((t) => ({ role: t.role, content: t.content })) : [] } }),
     onSuccess: (r) => {
-      const replies: Turn[] = r.messages.filter((m: any) => m.role === "assistant").map((m: any, i: number, a: any[]) => ({ id: seq++, role: "assistant", content: m.content, delivery: m.delivery_status, debug: i === a.length - 1 ? r.debug : undefined, paused: r.ai_paused, profile: r.profile }));
+      const replies: Turn[] = r.messages.filter((m: any) => m.role === "assistant").map((m: any) => ({ id: seq++, role: "assistant", content: m.content, delivery: m.delivery_status, debug: r.debug, followup: m.sources?.path === "followup", paused: r.ai_paused, profile: r.profile }));
       if (!replies.length) replies.push({ id: seq++, role: "assistant", content: "", debug: r.debug, paused: r.ai_paused, profile: r.profile });
       setTurns((t) => [...t, ...replies]);
-      setSel(replies[replies.length - 1].id);
+      setSel(replies[0].id);
     },
   });
   const submit = () => { const m = text.trim(); if (!m || send.isPending) return; setTurns((t) => [...t, { id: seq++, role: "user", content: m }]); setText(""); send.mutate(m); };
@@ -49,7 +67,6 @@ export default function TestChat() {
 
   return (
     <>
-      <PageHeader title="Test chat" subtitle="Talk to the assistant exactly as a customer would. Nothing is sent to Meta. Select any reply to inspect how it was produced." />
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(420px,0.95fr)]">
         <section aria-label="Chat" className="flex flex-col rounded-panel border border-line bg-surface">
           <div className="grid gap-3 border-b border-line p-3 sm:grid-cols-[180px_minmax(0,1fr)_auto]">
@@ -68,10 +85,10 @@ export default function TestChat() {
             ) : (
               <div key={t.id} className="flex justify-start">
                 <div className={cx("max-w-[85%] rounded-panel border px-3 py-2", sel === t.id ? "border-accent bg-accent-soft" : "border-transparent bg-sunken")}>
-                  <p className="mb-0.5 flex items-center gap-1 text-xs font-semibold text-muted"><Bot className="h-3 w-3" aria-hidden />Assistant{t.debug?.path && <Badge tone={PATH[t.debug.path]?.tone ?? "neutral"} className="ml-1">{PATH[t.debug.path]?.label ?? t.debug.path}</Badge>}</p>
+                  <p className="mb-0.5 flex items-center gap-1 text-xs font-semibold text-muted"><Bot className="h-3 w-3" aria-hidden />Assistant{t.followup && <Badge className="ml-1">follow-up</Badge>}{!t.followup && t.debug?.path && <Badge tone={PATH[t.debug.path]?.tone ?? "neutral"} className="ml-1">{PATH[t.debug.path]?.label ?? t.debug.path}</Badge>}</p>
                   {t.content ? <p className="whitespace-pre-wrap break-words">{t.content}</p> : <p className="italic text-muted">{t.paused ? "No reply: the AI is paused for this conversation." : "No reply was generated."}</p>}
                   <div className="mt-2 flex flex-wrap gap-2"><Button size="sm" variant="ghost" aria-pressed={sel === t.id} onClick={() => setSel(t.id)}><ShieldCheck className="h-3.5 w-3.5" aria-hidden />Inspect</Button>
-                    {t.content && <Button size="sm" variant="ghost" onClick={() => setFix({ q: prevUser(t.id), a: t.content })}><ThumbsDown className="h-3.5 w-3.5" aria-hidden />Answer is wrong</Button>}</div>
+                    {t.content && <Button size="sm" variant="ghost" onClick={() => { setFix({ q: prevUser(t.id), a: t.content }); markWrong(t.content); }}><ThumbsDown className="h-3.5 w-3.5" aria-hidden />Answer is wrong</Button>}</div>
                 </div>
               </div>
             ))}
@@ -86,24 +103,33 @@ export default function TestChat() {
         </section>
         <div className="xl:sticky xl:top-4 xl:self-start"><DebugPanel turn={selected} /></div>
       </div>
-      {fix && <FixModal q={fix.q} a={fix.a} onClose={() => setFix(null)} onSaved={() => { setFix(null); toast("Saved to the Q&A table. The next customer asking this gets your answer."); }} />}
+      {fix && <FixModal q={fix.q} a={fix.a} onClose={() => setFix(null)} onSaved={(evalAdded) => { setFix(null); toast(evalAdded ? "Saved to Q&A and the evaluation set." : "Saved to the Q&A table. The next customer asking this gets your answer."); }} />}
     </>
   );
 }
 
-function FixModal({ q, a, onClose, onSaved }: { q: string; a: string; onClose: () => void; onSaved: () => void }) {
+function FixModal({ q, a, onClose, onSaved }: { q: string; a: string; onClose: () => void; onSaved: (evalAdded: boolean) => void }) {
   const qc = useQueryClient();
   const [question, setQ] = useState(q);
   const [answer, setA] = useState("");
-  const save = useMutation({ mutationFn: () => api("/api/qa", { body: { question, answer_template: answer, category: "corrections", active: true } }), onSuccess: () => { qc.invalidateQueries({ queryKey: ["qa"] }); onSaved(); } });
+  const [language, setLanguage] = useState(/[\u0980-\u09ff]/.test(q) ? "bn" : "banglish");
+  const [clearAll, setClearAll] = useState(false);
+  const save = useMutation({ mutationFn: async (addEval: boolean) => {
+    await api("/api/qa", { body: { question, answer_template: answer, category: "corrections", active: true } });
+    if (addEval) await api("/api/eval/cases", { body: { question, expected_answer: answer, language, tags: ["correction"], active: true } });
+    if (clearAll) await api("/api/cache/feedback", { body: { answer: a, clear_all: true } });
+    return addEval;
+  }, onSuccess: (addEval) => { qc.invalidateQueries({ queryKey: ["qa"] }); qc.invalidateQueries({ queryKey: ["eval-cases"] }); onSaved(addEval); } });
   return (
     <Modal wide title="Save a corrected answer" onClose={onClose}>
-      <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
+      <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); save.mutate(false); }}>
         <div className="rounded-ctl bg-sunken px-3 py-2 text-sm"><p className="font-semibold">The assistant said</p><p className="whitespace-pre-wrap">{a}</p></div>
         <Field label="Question">{(i) => <Input id={i} required value={question} onChange={(e) => setQ(e.target.value)} />}</Field>
         <Field label="Correct answer" hint="Use {variable} to insert values from the Variables panel.">{(i) => <Textarea id={i} required rows={5} value={answer} onChange={(e) => setA(e.target.value)} />}</Field>
+        <Switch checked={clearAll} onChange={setClearAll} label="Also clear the whole answer cache (verified answers are kept)" />
+        <Field label="Evaluation language">{(i) => <Select id={i} value={language} onChange={(e) => setLanguage(e.target.value)}><option value="bn">Bangla</option><option value="banglish">Banglish</option><option value="en">English</option></Select>}</Field>
         <ErrorNote error={save.error} />
-        <div className="flex justify-end gap-2"><Button type="button" onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" loading={save.isPending}>Save to Q&A</Button></div>
+        <div className="flex flex-wrap justify-end gap-2"><Button type="button" onClick={onClose}>Cancel</Button><Button type="submit" loading={save.isPending}>Save to Q&A</Button><Button type="button" variant="primary" loading={save.isPending} disabled={!question.trim() || !answer.trim()} onClick={() => save.mutate(true)}>Save + add to eval set</Button></div>
       </form>
     </Modal>
   );
@@ -122,8 +148,11 @@ function DebugPanel({ turn }: { turn: Turn | null }) {
   return (
     <Panel title="How this answer was made" actions={<Badge tone={p.tone}>{p.label}</Badge>}>
       <div className="space-y-4">
+        {d.inspector && <Section title="Reply inspector"><ReplyInspector key={turn.id} i={d.inspector} /></Section>}
         <Section title="Path"><p className="text-sm">{p.note}</p>{d.error && <p className="mt-1 text-sm text-danger">{d.error}</p>}
           <dl className="mt-2"><KV k="Latency" v={`${d.latency_ms ?? 0} ms`} />{d.tier && <KV k="Tier" v={d.tier === "large" ? "Large model" : "Standard model"} />}{d.fallback_used && <KV k="Fallback provider used" v="Yes" />}{d.budget_fallback && <KV k="Budget fallback" v="Yes" />}{d.cached && <KV k="Saved to cache" v="Yes" />}</dl></Section>
+
+        {d.question_rewrite && <Section title="Question used for retrieval"><div className="space-y-2 text-sm"><div><p className="text-xs font-semibold text-muted">Customer message</p><p className="mt-0.5 whitespace-pre-wrap">{d.question_rewrite.original}</p></div><div><p className="text-xs font-semibold text-muted">Standalone question {d.question_rewrite.used ? "(rewritten)" : "(original)"}</p><p className="mt-0.5 whitespace-pre-wrap rounded-ctl bg-sunken p-2">{d.question_rewrite.rewritten}</p></div></div></Section>}
 
         {(d.qa_match || d.cache || d.qa_candidates?.length > 0) && (
           <Section title="Q&A and cache matches">
@@ -133,11 +162,18 @@ function DebugPanel({ turn }: { turn: Turn | null }) {
           </Section>
         )}
 
+        {d.keyword_search && <Section title="Keyword search">
+          <p className="text-sm"><Badge tone={d.keyword_search.used ? "ok" : "neutral"}>{d.keyword_search.used ? "used" : "not used (old search ran)"}</Badge> {d.keyword_search.source && <span className="text-muted">keywords from {d.keyword_search.source === "ai" ? "the AI" : "word rules"}{d.keyword_search.intent ? ` · wants: ${d.keyword_search.intent}` : ""}</span>}</p>
+            <p className="mt-1 text-sm">{(d.keyword_search.keywords ?? []).map((k: string) => <Badge key={k} className="mr-1">{k}</Badge>)}</p>
+            <p className="mt-1 text-xs text-muted">coverage {d.keyword_search.coverage ?? "-"} · {d.keyword_search.ms ?? "-"} ms{d.keyword_search.ai_note ? ` · ${d.keyword_search.ai_note}` : ""}{d.keyword_search.reason ? ` · ${d.keyword_search.reason}` : ""}</p>
+          </Section>}
+
         {d.chunks && (
           <Section title={`Knowledge retrieved (${d.chunks.length})`}>
             {d.chunks.length === 0 ? <p className="text-sm text-muted">No chunk reached the minimum similarity.</p> : (
               <ul className="space-y-2">{d.chunks.map((c: any) => (
-                <li key={c.chunk_id} className="rounded-ctl border border-line p-2 text-sm"><div className="flex justify-between gap-2"><span className="font-semibold">{c.document}{c.page ? `, page ${c.page}` : ""}</span><span className="tabular-nums text-muted">{c.similarity}</span></div>
+                <li key={c.chunk_id} className="rounded-ctl border border-line p-2 text-sm"><div className="flex justify-between gap-2"><span className="font-semibold">{c.document}{c.page ? `, page ${c.page}` : ""}</span><span className="tabular-nums text-muted">score {c.similarity}</span></div>
+                  <p className="mb-1 text-xs text-muted">vector {c.vector} · keywords {c.keywords}{c.rerank != null ? ` · rerank ${c.rerank}` : ""}</p>
                   <Meter value={c.similarity} label={`Similarity ${c.similarity}`} /><p className="mt-1 text-xs text-muted">{c.preview}</p></li>))}</ul>
             )}
             {d.retrieval_confidence !== undefined && <p className="mt-2 text-xs text-muted">Best match {d.retrieval_confidence}</p>}
@@ -170,7 +206,11 @@ function DebugPanel({ turn }: { turn: Turn | null }) {
             <dl><KV k="Profile" v={`#${prof.id}`} /><KV k="Consent" v={prof.consent} />
               <div className="py-1 text-sm"><dt className="text-muted">Summary the AI receives</dt><dd className="mt-0.5 rounded-ctl bg-sunken px-2 py-1">{d.profile_injected?.summary || "(none)"}</dd></div>
               <div className="py-1 text-sm"><dt className="text-muted">Fields it may ask for</dt><dd className="mt-0.5">{d.profile_injected?.missing_fields?.length ? d.profile_injected.missing_fields.join(", ") : "none (consent is needed first, or nothing is missing)"}</dd></div>
-              <div className="py-1 text-sm"><dt className="text-muted">Extracted from this chat</dt><dd className="mt-0.5">{d.post_reply?.extracted?.length ? d.post_reply.extracted.map((e: any) => `${e.key} (${e.status})`).join(", ") : "nothing this turn (runs every few messages)"}</dd></div>
+              {d.post_reply?.info ? <div className="py-1 text-sm"><dt className="text-muted">Guest info in this message</dt><dd className="mt-0.5">
+                <ul className="space-y-0.5">{d.post_reply.info.pieces.map((p: any, i: number) => (
+                  <li key={i} className="flex flex-wrap items-center gap-1.5"><Badge tone={p.type === "guest_info" ? "ok" : p.type === "question" ? "blue" : "neutral"}>{p.type === "guest_info" ? "guest info" : p.type ?? (p.flagged ? "flagged" : "no keywords")}</Badge><span>{p.text}</span></li>))}</ul>
+                <p className="mt-1 text-xs text-muted">{!d.post_reply.info.checked ? "No personal-info keywords: no AI call." : d.post_reply.info.saved?.length ? `Saved: ${d.post_reply.info.saved.map((e: any) => `${e.key} (${e.status})`).join(", ")}` : "Checked by the AI: nothing to save."}</p>
+              </dd></div> : <div className="py-1 text-sm"><dt className="text-muted">Extracted from this chat</dt><dd className="mt-0.5">{d.post_reply?.extracted?.length ? d.post_reply.extracted.map((e: any) => `${e.key} (${e.status})`).join(", ") : "nothing this turn (runs every few messages)"}</dd></div>}
               {prof.pending_fields?.length > 0 && <div className="py-1 text-sm"><dt className="text-muted">Held until consent</dt><dd className="mt-0.5">{prof.pending_fields.join(", ")}</dd></div>}
               {d.events?.length > 0 && <div className="py-1 text-sm"><dt className="text-muted">Identity events</dt><dd className="mt-0.5">{d.events.join("; ")}</dd></div>}
             </dl>

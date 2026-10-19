@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.models import Chunk, Document
 from app.rag.extract import Section, extract_pages, extract_sections  # noqa: F401 - extract_pages re-exported
-from app.rag.embeddings import embed_texts
+from app.rag.embeddings import embed_texts, embedding_signature
 from app.services.settings_service import get_setting, set_setting
 
 logger = logging.getLogger(__name__)
@@ -87,6 +87,7 @@ class ChunkDraft:
     page: int | None
     content: str
     question: str | None = None
+    meta: str | None = None
 
 
 def _is_bangla(s: str) -> bool:
@@ -107,7 +108,7 @@ def chunk_sections(sections: list[Section], *, target: int = 120, overlap: int =
             q_label, a_label = ("প্রশ্ন", "উত্তর") if _is_bangla(s.title) else ("Question", "Answer")
             head = f"{q_label}: {s.title}\n{a_label}: "
         for page, text in chunk_pages([(s.page, s.text)], target=target, maximum=int(target * 1.3), overlap=min(overlap, target // 3)):
-            out.append(ChunkDraft(page, head + text, s.title))
+            out.append(ChunkDraft(page, head + text, s.title, s.meta))
     return out
 
 
@@ -136,9 +137,10 @@ async def process_document(session: AsyncSession, doc_id: int, *, storage: FileS
         vecs: list[list[float]] = []
         for i in range(0, len(chunks), 64):
             vecs += await embed_texts(session, [c.content for c in chunks[i:i + 64]], embedder=embedder)
+        version = await embedding_signature(session, embedder=embedder)
         for pos, (c, vec) in enumerate(zip(chunks, vecs)):
-            session.add(Chunk(document_id=doc.id, position=pos, content=c.content, question=c.question,
-                              page_no=c.page, embedding=vec))
+            session.add(Chunk(document_id=doc.id, position=pos, content=c.content, question=c.question, keywords=c.meta,
+                              page_no=c.page, embedding=vec, embedding_version=version))
         doc.chunk_count, doc.status = len(chunks), "ready"
         # a newer version replaces older ones with the same title
         old = (await session.execute(select(Document.id).where(Document.title == doc.title, Document.id != doc.id,

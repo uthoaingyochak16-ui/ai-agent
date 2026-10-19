@@ -13,6 +13,7 @@ const Knowledge = lazy(() => import("./pages/Knowledge"));
 const QAManager = lazy(() => import("./pages/QAManager"));
 const Channels = lazy(() => import("./pages/Channels"));
 const AISettings = lazy(() => import("./pages/AISettings"));
+const Evaluation = lazy(() => import("./pages/Evaluation"));
 const TestChat = lazy(() => import("./pages/TestChat"));
 
 function Protected({ admin }: { admin?: boolean }) {
@@ -35,6 +36,7 @@ export default function App() {
           <Route path="profiles/:id" element={<ProfileDetail />} />
           <Route path="knowledge" element={<Knowledge />} />
           <Route path="qa" element={<QAManager />} />
+          <Route path="evaluation" element={<Evaluation />} />
           <Route path="test-chat" element={<TestChat />} />
         </Route>
         <Route element={<Protected admin />}>

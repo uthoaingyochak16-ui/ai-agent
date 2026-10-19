@@ -13,6 +13,17 @@ _PRIORITY = {"CARD": 0, "NID": 1, "CUSTOM": 2, "EMAIL": 3, "PHONE": 4, "ADDRESS"
 _PLACEHOLDER_RE = re.compile(r"\[([A-Z]+)_(\d+)\]")
 
 
+def _normalized_phone(digits: str) -> str | None:
+    from app.services.contacts import normalize_phone  # local import: contacts -> patterns, no cycle at import time
+    return normalize_phone(digits)
+
+
+def _is_phone(digits: str) -> bool:
+    """8801812345604 (a +880 number) can pass the card checksum: a valid phone number is never a card."""
+    from app.services.contacts import normalize_phone  # local import: contacts -> patterns, no cycle at import time
+    return normalize_phone(digits) is not None
+
+
 @dataclass(frozen=True)
 class Finding:
     kind: str
@@ -29,8 +40,10 @@ class _Span:
 
 class Redactor:
     def __init__(self, kinds: frozenset[str] | set[str] = ALL_KINDS, known_names: tuple[str, ...] = (),
-                 name_mode: str = "placeholder", custom_patterns: tuple[str, ...] = ()):
+                 name_mode: str = "placeholder", custom_patterns: tuple[str, ...] = (),
+                 keep: frozenset[str] = frozenset()):
         self.kinds = frozenset(kinds)
+        self._keep = keep  # public contacts left as they are: our own office numbers/emails (E.164 / lower-case)
         self.name_mode = name_mode  # placeholder | first_name | none
         self._custom = [re.compile(p) for p in custom_patterns]
         self._map: dict[str, str] = {}          # placeholder -> original
@@ -86,7 +99,7 @@ class Redactor:
         if "CARD" in self.kinds:
             for m in CARD_CAND_RE.finditer(norm):
                 d = digits_only(m.group())
-                if CARD_MIN <= len(d) <= CARD_MAX and luhn_ok(d):
+                if CARD_MIN <= len(d) <= CARD_MAX and luhn_ok(d) and not _is_phone(d):
                     spans.append(_Span(m.start(), m.end(), "CARD", d))
         if "NID" in self.kinds:
             for m in NID_CONTEXT_RE.finditer(norm):
@@ -100,11 +113,12 @@ class Redactor:
                         spans.append(_Span(m.start(), m.end(), "CUSTOM", m.group()))
         if "EMAIL" in self.kinds:
             for m in EMAIL_RE.finditer(norm):
-                spans.append(_Span(m.start(), m.end(), "EMAIL", m.group().lower()))
+                if m.group().lower() not in self._keep:
+                    spans.append(_Span(m.start(), m.end(), "EMAIL", m.group().lower()))
         if "PHONE" in self.kinds:
             for m in PHONE_CAND_RE.finditer(norm):
                 d = digits_only(m.group())
-                if 8 <= len(d) <= 15:
+                if 8 <= len(d) <= 15 and not (self._keep and _normalized_phone(d) in self._keep):
                     spans.append(_Span(m.start(), m.end(), "PHONE", d))
         if "ADDRESS" in self.kinds:
             for m in ADDRESS_RE.finditer(norm):
@@ -161,6 +175,7 @@ class Redactor:
 STORAGE_KINDS = frozenset({"CARD", "NID", "EMAIL", "PHONE", "ADDRESS", "CUSTOM"})  # names stay readable in the inbox
 
 
-def redact_for_storage(text: str, custom_patterns: tuple[str, ...] = ()) -> str:
-    """Irreversible redaction for what we persist in `messages.content_redacted`."""
-    return Redactor(kinds=STORAGE_KINDS, custom_patterns=custom_patterns).redact(text)
+def redact_for_storage(text: str, custom_patterns: tuple[str, ...] = (), keep: frozenset[str] = frozenset()) -> str:
+    """Irreversible redaction for what we persist in `messages.content_redacted`. `keep`: our own public contacts
+    (contact_owner.business_contacts), which stay readable, so a later prompt's history still has the real number."""
+    return Redactor(kinds=STORAGE_KINDS, custom_patterns=custom_patterns, keep=keep).redact(text)

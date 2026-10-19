@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Badge, Button, ChannelBadge, Empty, Meter, PageHeader, Panel, Select, Spinner, Td, Th, TableWrap } from "../components/ui";
 import { api } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { ago, num, usd } from "../lib/format";
 
 type Daily = { date: string; messages: number; cost: number };
@@ -30,6 +31,7 @@ function Bars({ data, field, label, fmt }: { data: Daily[]; field: "messages" | 
 export default function Dashboard() {
   const [days, setDays] = useState(14);
   const nav = useNavigate();
+  const { user } = useAuth();
   const q = useQuery({ queryKey: ["dashboard", days], queryFn: () => api("/api/stats/dashboard", { params: { days } }), refetchInterval: 30000 });
   if (q.isLoading) return <Spinner />;
   const d = q.data;
@@ -38,8 +40,10 @@ export default function Dashboard() {
   const b = d.budget;
   return (
     <>
-      <PageHeader title="Dashboard" subtitle="Real customer traffic only. Test chats are excluded from message counts but their AI cost is included."
+      <PageHeader title="Dashboard" subtitle="Real customer traffic and assistant performance at a glance."
         actions={<Select aria-label="Period" value={days} onChange={(e) => setDays(+e.target.value)} className="w-auto"><option value={7}>Last 7 days</option><option value={14}>Last 14 days</option><option value={30}>Last 30 days</option></Select>} />
+      {d.embeddings?.hash_warning && <div className="mb-5 rounded-panel border border-warn bg-warn-soft px-4 py-3 text-sm text-warn"><strong>Embedding warning:</strong> hash embeddings are for testing and give weak Bangla/Banglish semantic search. Configure OpenAI, Google, or a private local endpoint in AI Settings → Retrieval.</div>}
+      {user?.role === "admin" && <SystemHealth days={days} />}
       <dl className="mb-5 grid grid-cols-2 gap-x-6 gap-y-3 border-y border-line py-4 sm:grid-cols-4">
         {[["Messages received", num(d.totals.messages_in)], ["AI cost", usd(d.totals.cost)], ["Tokens in / out", `${num(d.totals.tokens_in)} / ${num(d.totals.tokens_out)}`], ["Unanswered questions", num(d.unanswered.open)]].map(([k, v]) => (
           <div key={k}><dt className="text-sm text-muted">{k}</dt><dd className="text-2xl font-bold tabular-nums">{v}</dd></div>
@@ -57,7 +61,7 @@ export default function Dashboard() {
       </div>
       <div className="mb-5 grid gap-5 lg:grid-cols-2">
         <Panel title="By channel">
-          {d.channels.length === 0 ? <Empty title="No messages yet">Connect a channel, or try the Test chat.</Empty> : (
+          {d.channels.length === 0 ? <Empty title="No messages yet">Connect a channel to start receiving customer messages.</Empty> : (
             <TableWrap compact><thead><tr><Th>Channel</Th><Th className="text-right">Customers</Th><Th className="text-right">AI replies</Th><Th className="text-right">Staff replies</Th></tr></thead>
               <tbody>{d.channels.map((c: any) => <tr key={c.channel}><Td><ChannelBadge channel={c.channel} /></Td><Td className="text-right tabular-nums">{num(c.user)}</Td><Td className="text-right tabular-nums">{num(c.assistant)}</Td><Td className="text-right tabular-nums">{num(c.agent)}</Td></tr>)}</tbody></TableWrap>
           )}
@@ -72,9 +76,14 @@ export default function Dashboard() {
       </div>
       <div className="grid gap-5 lg:grid-cols-2">
         <Panel title="Unanswered questions" actions={<Link to="/qa" className="text-sm font-semibold text-accent-strong underline">Open Q&A manager</Link>}>
+          <dl className="mb-3 grid grid-cols-3 gap-2 text-center">
+            {[["Asked more than once", d.unanswered.repeated], ["Answer-is-wrong feedback", d.unanswered.feedback], ["Drafts awaiting approval", d.unanswered.pending_approval]].map(([k, v]) => (
+              <div key={k as string} className="rounded-ctl bg-sunken p-2"><dt className="text-xs text-muted">{k}</dt><dd className="text-lg font-semibold">{num((v as number) ?? 0)}</dd></div>))}
+          </dl>
+          {!!d.unanswered.topics?.length && <p className="mb-2 text-xs text-muted"><span className="font-semibold">Repeated topics:</span> {d.unanswered.topics.map((t: any) => `${t.category} (${t.asked}×)`).join(" · ")}</p>}
           {d.unanswered.recent.length === 0 ? <p className="text-sm text-muted">Nothing waiting. Questions the assistant could not answer appear here.</p> : (
             <ul className="divide-y divide-line">{d.unanswered.recent.map((u: any) => (
-              <li key={u.id} className="flex items-start justify-between gap-3 py-2"><div className="min-w-0"><p className="break-words">{u.question}</p><p className="text-xs text-muted">{u.channel ?? "test"}, {ago(u.created_at)}{u.reason === "output_blocked" && " (answer blocked by the privacy filter)"}</p></div>
+              <li key={u.id} className="flex items-start justify-between gap-3 py-2"><div className="min-w-0"><p className="break-words">{u.question}</p><p className="text-xs text-muted">{u.channel ?? "test"}, {ago(u.created_at)}{u.occurrences > 1 && `, asked ${u.occurrences}×`}{u.reason === "output_blocked" && " (answer blocked by the privacy filter)"}{u.reason === "wrong_answer" && " (answer marked wrong)"}</p></div>
                 <Button size="sm" onClick={() => nav("/qa", { state: { question: u.question, unansweredId: u.id } })}>Add answer</Button></li>
             ))}</ul>
           )}
@@ -88,5 +97,38 @@ export default function Dashboard() {
         </Panel>
       </div>
     </>
+  );
+}
+
+const STATE_TONE: Record<string, "ok" | "warn" | "danger"> = { ok: "ok", amber: "warn", red: "danger" };
+const pct = (v: number | null | undefined) => (v == null ? "-" : `${Math.round(v * 100)}%`);
+const secs = (s: number) => (s >= 3600 ? `${Math.floor(s / 3600)} h` : s >= 60 ? `${Math.floor(s / 60)} min` : `${s} s`);
+
+function SystemHealth({ days }: { days: number }) {
+  const q = useQuery({ queryKey: ["health-deep", days], queryFn: () => api<any>("/api/health/deep", { params: { days } }), refetchInterval: 30000 });
+  if (q.isLoading || !q.data) return null;
+  const { system: s, ai } = q.data;
+  const cells: [string, string, string, string][] = [
+    ["Incoming queue", `${s.events.queued} waiting · ${s.events.processing} working · ${s.events.failed} failed`, s.events.oldest_pending_s ? `oldest ${secs(s.events.oldest_pending_s)}` : "nothing waiting", s.events.state],
+    ["Replies not delivered (24 h)", `${s.delivery_24h.failed} failed · ${s.delivery_24h.blocked} blocked`, "blocked = outside the messaging window", s.delivery_24h.state],
+    ["AI calls (24 h)", `${num(s.llm_24h.calls)} calls · ${pct(s.llm_24h.error_rate)} errors`, s.llm_24h.p95_latency_ms != null ? `p95 ${(s.llm_24h.p95_latency_ms / 1000).toFixed(1)} s` : "no calls yet", s.llm_24h.state],
+    ["Budget", s.budget.level === "unlimited" ? "no limit set" : `${s.budget.percent}% used`, s.budget.level, s.budget.state],
+    ["Embeddings", s.embeddings.provider, s.embeddings.hash_warning ? "test-only embedder on a live channel" : s.embeddings.mismatch_total ? `${s.embeddings.mismatch_total} items need re-embedding` : "consistent", s.embeddings.state],
+    ["Card safety (24 h)", `${s.security_24h.card_shared} card numbers shared · ${s.security_24h.card_request_blocked} AI requests blocked`, s.security_24h.state === "red" ? "see the red badges in the Inbox" : "no card details asked or shared", s.security_24h.state],
+  ];
+  const worst = cells.some((c) => c[3] === "red") ? "red" : cells.some((c) => c[3] === "amber") ? "amber" : "ok";
+  return (
+    <Panel className="mb-5" title="System health" actions={<Badge tone={STATE_TONE[worst]}>{worst === "ok" ? "All good" : worst === "amber" ? "Needs attention" : "Problem"}</Badge>}>
+      <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{cells.map(([k, v, sub, st]) => (
+        <li key={k} className={`rounded-ctl border p-3 ${st === "red" ? "border-danger bg-danger-soft" : st === "amber" ? "border-warn bg-warn-soft" : "border-line"}`}>
+          <p className="text-xs font-semibold text-muted">{k}</p><p className="mt-1 font-semibold">{v}</p><p className="text-xs text-muted">{sub}</p></li>))}</ul>
+      <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-3 border-t border-line pt-4 sm:grid-cols-5">
+        {[["Resolved by AI", pct(ai.resolution_rate)], ["Handed to a person", pct(ai.handover_rate)], ["“Don't know” replies", pct(ai.no_context_rate)],
+          ["AI cost per conversation", ai.avg_cost_per_conversation == null ? "-" : usd(ai.avg_cost_per_conversation)],
+          ["Median reply time", ai.median_reply_latency_s == null ? "-" : `${ai.median_reply_latency_s.toFixed(1)} s`]].map(([k, v]) => (
+          <div key={k}><dt className="text-sm text-muted">{k}</dt><dd className="text-xl font-bold tabular-nums">{v}</dd></div>))}
+      </dl>
+      <p className="mt-2 text-xs text-muted">{num(ai.conversations)} conversations in the period. Resolved = got an AI reply, no staff reply and no handover.</p>
+    </Panel>
   );
 }

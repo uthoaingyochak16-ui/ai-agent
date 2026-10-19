@@ -39,7 +39,7 @@ async def test_message_to_kb_answer_to_consent_to_saved_phone(session, tmp_path,
 
     await handle_message(session, mk_msg(text="and are you open on friday, what are the shop hours", mid="e2"))
     replies = [json.loads(c.request.content)["message"]["text"] for c in route.calls if b'"message"' in c.request.content]
-    assert len(replies) == 2 and "may I save your name" in replies[1]              # consent asked once, after the answer
+    assert len(replies) == 2 and "may i save your name" in replies[1].lower()              # consent asked once, after the answer
     p = (await session.execute(select(Profile))).scalar_one()
     assert C.consent_state(p) == "asked" and p.phone_enc is None
 
@@ -48,7 +48,7 @@ async def test_message_to_kb_answer_to_consent_to_saved_phone(session, tmp_path,
     assert p.consent_given and C.get_phone(p) == "+8801712345678"
     await handle_message(session, mk_msg(text="what are the shop hours again", mid="e4"))
     replies = [json.loads(c.request.content)["message"]["text"] for c in route.calls if b'"message"' in c.request.content]
-    assert sum("may I save your name" in r for r in replies) == 1                  # never asked a second time
+    assert sum("may i save your name" in r.lower() for r in replies) == 1                  # never asked a second time
     msgs = (await session.execute(select(Message).where(Message.role == "assistant"))).scalars().all()
     assert msgs[0].sources_json["path"] == "llm" and msgs[0].sources_json["chunks"][0]["document"] == "Hours"
 

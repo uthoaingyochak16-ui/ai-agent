@@ -48,10 +48,12 @@ services:
 
   frontend:
     build: ./frontend
+    ports:
+      - "3000:80"
     depends_on: [backend]
 
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2025.2.1
     command: ["tunnel", "--no-autoupdate", "--url", "http://frontend:80"]
     restart: unless-stopped
     depends_on: [frontend]

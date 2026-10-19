@@ -5,7 +5,7 @@ import hmac
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,7 +22,8 @@ router = APIRouter(prefix="/api/channels", tags=["channels"], dependencies=[Depe
 
 def _view(channel: str, cfg: ChannelConfig | None) -> dict:
     s = get_settings()
-    return {"channel": channel, "webhook_url": f"{s.public_base_url.rstrip('/')}/webhooks/{channel}",
+    return {"id": cfg.id if cfg else None, "label": cfg.label if cfg else None,
+            "channel": channel, "webhook_url": f"{s.public_base_url.rstrip('/')}/webhooks/{channel}",
             "enabled": bool(cfg and cfg.enabled), "account_id": cfg.account_id if cfg else None,
             "waba_id": cfg.waba_id if cfg else None, "has_token": bool(cfg and cfg.access_token_enc),
             "has_app_secret": bool(cfg and cfg.app_secret_enc), "server_has_app_secret": bool(s.meta_app_secret),
@@ -31,46 +32,112 @@ def _view(channel: str, cfg: ChannelConfig | None) -> dict:
             "last_checked_at": cfg.last_checked_at if cfg else None}
 
 
+async def _accounts(session: AsyncSession, channel: str) -> list[ChannelConfig]:
+    return list((await session.execute(select(ChannelConfig).where(ChannelConfig.channel == channel)
+                                       .order_by(ChannelConfig.id))).scalars())
+
+
 @router.get("")
 async def list_channels(session: AsyncSession = Depends(get_session)):
-    cfgs = {c.channel: c for c in (await session.execute(select(ChannelConfig))).scalars()}
-    return [_view(ch, cfgs.get(ch)) for ch in CHANNELS]
+    """One entry per channel; `accounts` lists every connected Page / account / number. The entry's own fields
+    describe the first account, as they did when a channel had only one."""
+    out = []
+    for ch in CHANNELS:
+        accs = await _accounts(session, ch)
+        out.append(_view(ch, accs[0] if accs else None) | {"accounts": [_view(ch, a) for a in accs]})
+    return out
 
 
 class ChannelIn(BaseModel):
+    label: str | None = Field(None, max_length=120)
     enabled: bool | None = None
-    account_id: str | None = None
-    waba_id: str | None = None
+    account_id: str | None = Field(None, max_length=64)
+    waba_id: str | None = Field(None, max_length=64)
     access_token: str | None = None   # write-only
     app_secret: str | None = None     # write-only
-    verify_token: str | None = None
+    verify_token: str | None = Field(None, max_length=128)
+
+
+async def _apply(session: AsyncSession, cfg: ChannelConfig, body: ChannelIn) -> dict:
+    if body.account_id is not None and body.account_id.strip():
+        clash = (await session.execute(select(ChannelConfig.id).where(
+            ChannelConfig.channel == cfg.channel, ChannelConfig.account_id == body.account_id.strip(),
+            ChannelConfig.id != (cfg.id or 0)))).first()
+        if clash:
+            raise HTTPException(409, "This Page / account / number is already connected")
+    for f in ("label", "enabled", "account_id", "waba_id", "verify_token"):
+        v = getattr(body, f)
+        if v is not None:
+            setattr(cfg, f, (v.strip() or None) if isinstance(v, str) and f in ("label", "account_id", "waba_id")
+                    else v.strip() if isinstance(v, str) else v)
+    if body.access_token:
+        cfg.access_token_enc = crypto.encrypt(body.access_token, aad=f"token:{cfg.channel}")
+    if body.app_secret:
+        cfg.app_secret_enc = crypto.encrypt(body.app_secret, aad=f"secret:{cfg.channel}")
+    cfg.status = "configured" if cfg.access_token_enc else "unconfigured"
+    await session.commit()
+    return _view(cfg.channel, cfg)
+
+
+async def _account(session: AsyncSession, account: int) -> ChannelConfig:
+    cfg = await session.get(ChannelConfig, account)
+    if cfg is None:
+        raise HTTPException(404, "Unknown account")
+    return cfg
+
+
+@router.post("/{channel}/accounts")
+async def add_account(channel: str, body: ChannelIn, session: AsyncSession = Depends(get_session)):
+    """Connect another Facebook Page / Instagram account / WhatsApp number."""
+    if channel not in CHANNELS:
+        raise HTTPException(404, "Unknown channel")
+    cfg = ChannelConfig(channel=channel)
+    session.add(cfg)
+    return await _apply(session, cfg, body)
+
+
+@router.put("/accounts/{account}")
+async def save_account(account: int, body: ChannelIn, session: AsyncSession = Depends(get_session)):
+    return await _apply(session, await _account(session, account), body)
+
+
+@router.delete("/accounts/{account}")
+async def delete_account(account: int, session: AsyncSession = Depends(get_session)):
+    """Disconnect it here. Its guests and conversations stay; replies to them go through another account of the same
+    channel only if Meta allows it (a Page-scoped id works only with its own Page)."""
+    await session.delete(await _account(session, account))
+    await session.commit()
+    return {"ok": True}
+
+
+@router.post("/accounts/{account}/test")
+async def test_account(account: int, session: AsyncSession = Depends(get_session)):
+    return await _test(session, await _account(session, account))
 
 
 @router.put("/{channel}")
 async def save_channel(channel: str, body: ChannelIn, session: AsyncSession = Depends(get_session)):
+    """The channel's first account (kept for single-account setups)."""
     if channel not in CHANNELS:
         raise HTTPException(404, "Unknown channel")
-    cfg = (await session.execute(select(ChannelConfig).where(ChannelConfig.channel == channel))).scalar_one_or_none()
-    if cfg is None:
-        cfg = ChannelConfig(channel=channel)
+    accs = await _accounts(session, channel)
+    cfg = accs[0] if accs else ChannelConfig(channel=channel)
+    if not accs:
         session.add(cfg)
-    for f in ("enabled", "account_id", "waba_id", "verify_token"):
-        v = getattr(body, f)
-        if v is not None:
-            setattr(cfg, f, v.strip() if isinstance(v, str) else v)
-    if body.access_token:
-        cfg.access_token_enc = crypto.encrypt(body.access_token, aad=f"token:{channel}")
-    if body.app_secret:
-        cfg.app_secret_enc = crypto.encrypt(body.app_secret, aad=f"secret:{channel}")
-    cfg.status = "configured" if cfg.access_token_enc else "unconfigured"
-    await session.commit()
-    return _view(channel, cfg)
+    return await _apply(session, cfg, body)
 
 
 @router.post("/{channel}/test")
 async def test_channel(channel: str, session: AsyncSession = Depends(get_session)):
-    cfg = (await session.execute(select(ChannelConfig).where(ChannelConfig.channel == channel))).scalar_one_or_none()
-    if cfg is None or not cfg.access_token_enc:
+    accs = await _accounts(session, channel)
+    if not accs:
+        raise HTTPException(409, "Save an access token first")
+    return await _test(session, accs[0])
+
+
+async def _test(session: AsyncSession, cfg: ChannelConfig) -> dict:
+    channel = cfg.channel
+    if not cfg.access_token_enc:
         raise HTTPException(409, "Save an access token first")
     s = get_settings()
     token = crypto.decrypt(cfg.access_token_enc, aad=f"token:{channel}")

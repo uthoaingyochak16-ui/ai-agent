@@ -4,6 +4,7 @@ from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.config import get_settings
@@ -35,21 +36,29 @@ class Chunk(Base):
     document_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), index=True)
     position: Mapped[int] = mapped_column(Integer, default=0)
     question: Mapped[str | None] = mapped_column(Text)  # the record's question, for Q&A-shaped files
+    keywords: Mapped[str | None] = mapped_column(Text)  # topic / keywords the data file itself gives for the record
     content: Mapped[str] = mapped_column(Text)
     page_no: Mapped[int | None] = mapped_column(Integer)
     embedding: Mapped[list[float]] = mapped_column(Vector(DIM))
+    embedding_version: Mapped[str | None] = mapped_column(String(255), index=True)
 
 
 class QAPair(Base):
     __tablename__ = "qa_pairs"
-    __table_args__ = (Index("ix_qa_embedding", "embedding", postgresql_ops={"embedding": "vector_cosine_ops"}, **_HNSW),)
+    __table_args__ = (
+        Index("ix_qa_embedding", "embedding", postgresql_ops={"embedding": "vector_cosine_ops"}, **_HNSW),
+        Index("ix_qa_pairs_question_norm_trgm", "question_norm", postgresql_using="gin",
+              postgresql_ops={"question_norm": "gin_trgm_ops"}),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     question: Mapped[str] = mapped_column(Text)
     question_norm: Mapped[str] = mapped_column(Text, index=True)
     answer_template: Mapped[str] = mapped_column(Text)  # supports {variable} placeholders
     category: Mapped[str | None] = mapped_column(String(64))
+    data_class: Mapped[str] = mapped_column(String(16), nullable=False, default="fixed", server_default="fixed", index=True)
     embedding: Mapped[list[float]] = mapped_column(Vector(DIM))
+    embedding_version: Mapped[str | None] = mapped_column(String(255), index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -67,24 +76,39 @@ class Variable(Base):
 class SemanticCache(Base):
     """Only PII-free question/answer pairs are cached, so one user's answer can never carry another's data."""
     __tablename__ = "semantic_cache"
-    __table_args__ = (Index("ix_cache_embedding", "embedding", postgresql_ops={"embedding": "vector_cosine_ops"}, **_HNSW),)
+    __table_args__ = (Index("ix_cache_embedding", "embedding", postgresql_ops={"embedding": "vector_cosine_ops"}, **_HNSW),
+                      Index("ix_cache_status", "status"))
 
     id: Mapped[int] = mapped_column(primary_key=True)
     question: Mapped[str] = mapped_column(Text)
     answer: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(12), default="auto", server_default="auto")  # auto | verified | blocked
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     embedding: Mapped[list[float]] = mapped_column(Vector(DIM))
+    embedding_version: Mapped[str | None] = mapped_column(String(255), index=True)
     context_version: Mapped[int] = mapped_column(Integer)
     hits: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class UnansweredQuestion(Base):
+    """The admin approval queue (Q&A manager -> Unknown questions). One row per distinct question: a repeat (same or
+    near-same wording) raises `occurrences`. Suggestions are drafts only; nothing here is live until an admin saves it
+    as a Q&A through "Add answer" (services/learning.py)."""
     __tablename__ = "unanswered_questions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     question: Mapped[str] = mapped_column(Text)  # redacted
+    question_norm: Mapped[str | None] = mapped_column(Text, index=True)
     channel: Mapped[str | None] = mapped_column(String(16))
     conversation_id: Mapped[int | None] = mapped_column(Integer)
-    reason: Mapped[str] = mapped_column(String(24), default="no_context")
-    resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+    reason: Mapped[str] = mapped_column(String(24), default="no_context")  # no_context | output_blocked | wrong_answer | needs_review
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False)  # kept in step with status (approved/ignored)
+    status: Mapped[str] = mapped_column(String(12), default="new", server_default="new", index=True)  # new|reviewing|approved|ignored
+    occurrences: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    suggested_category: Mapped[str | None] = mapped_column(String(64))
+    suggested_keywords: Mapped[list | None] = mapped_column(JSONB)
+    draft_answer: Mapped[str | None] = mapped_column(Text)       # suggested Q&A answer (never live by itself)
+    wrong_answer: Mapped[str | None] = mapped_column(Text)       # "answer is wrong" feedback: the reply that was wrong
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

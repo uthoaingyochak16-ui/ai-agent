@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,12 +15,32 @@ from app.llm.service import budget_state
 from app.models import LLMModel, LLMProviderConfig, LLMRoute
 from app.privacy.guard import PrivacyGuard, ProviderPolicy
 from app.services.settings_service import DEFAULTS, get_setting, set_setting
+from app.services.embedding_maintenance import embedding_status
 
 router = APIRouter(prefix="/api/ai", tags=["ai settings"], dependencies=[Depends(admin_only)])
-TASKS = ("answer", "answer_large", "extraction", "summarization")
+TASKS = ("answer", "answer_large", "rewrite", "keywords", "keygen", "router", "extraction", "summarization")
+_TASK_DEFAULTS = {"rewrite": (80, 0.0), "keywords": (120, 0.0), "keygen": (300, 0.0), "router": (160, 0.0)}  # (max_tokens, temperature) shown for an unset route
 
 # key -> (type, validator)
 _num = lambda lo, hi: (lambda v: lo <= v <= hi)  # noqa: E731
+_STYLE_TEXT = ("tone", "template", "template_en", "followup", "followup_en")
+
+
+def _valid_styles(v: dict) -> bool:
+    """reply_styles: {question type: {tone, template(_en) with {answer}, followup(_en), handover none|offer|auto}}."""
+    from app.services.reply_style import HANDOVER_RULES, TYPES
+    for qtype, s in v.items():
+        if qtype not in TYPES or not isinstance(s, dict) or set(s) - set(_STYLE_TEXT) - {"handover"}:
+            return False
+        if any(not isinstance(s.get(k, ""), str) or len(s.get(k, "")) > 1000 for k in _STYLE_TEXT):
+            return False
+        if any(s.get(k, "").strip() and "{answer}" not in s[k] for k in ("template", "template_en")):
+            return False
+        if s.get("handover", "none") not in HANDOVER_RULES:
+            return False
+    return True
+
+
 SETTING_SPECS: dict[str, tuple[tuple, object]] = {
     "monthly_budget_usd": ((int, float), _num(0, 1e7)), "budget_alert_percent": ((int, float), _num(1, 100)),
     "budget_fallback_enabled": ((bool,), None), "budget_hard_stop": ((bool,), None),
@@ -41,18 +61,52 @@ SETTING_SPECS: dict[str, tuple[tuple, object]] = {
     "system_prompt": ((str, type(None)), None),
     "greeting_enabled": ((bool,), None), "greeting_first_reply": ((str,), lambda v: bool(v.strip())),
     "greeting_return_reply": ((str,), lambda v: bool(v.strip())), "greeting_gap_hours": ((int, float), _num(0, 720)),
+    "greeting_first_reply_en": ((str,), None), "greeting_return_reply_en": ((str,), None),
+    "greeting_repeat_reply_en": ((str,), None),
     "greeting_words": ((list,), lambda v: all(isinstance(x, str) and x.strip() for x in v)),
     "conversation_retention_days": ((int,), _num(1, 3650)),
     "smalltalk_enabled": ((bool,), None),
     "chunk_words": ((int,), _num(30, 1000)), "chunk_overlap_words": ((int,), _num(0, 200)),
     "max_answer_chars": ((int,), _num(0, 4000)), "qa_text_threshold": ((int, float), _num(0.5, 1)),
     "ai_auto_resume_minutes": ((int, float), _num(0, 10080)),
+    "router_enabled": ((bool,), None),
+    "general_answer_enabled": ((bool,), None),
+    "keyword_search_enabled": ((bool,), None), "keyword_ai_enabled": ((bool,), None),
+    "keyword_ai_skip_above": ((int, float), _num(0, 1)), "keyword_min_coverage": ((int, float), _num(0.1, 1)),
+    "keyword_top_k": ((int,), _num(1, 10)),
+    "tools_enabled": ((dict,), lambda v: all(k in ("create_lead", "request_callback", "current_datetime") and isinstance(x, bool) for k, x in v.items())),
+    **{k: ((str,), lambda v: bool(v.strip())) for k in ("tool_confirm_prompt", "tool_declined_ack", "tool_lead_ack", "tool_callback_ack")},
+    **{f"{k}_en": ((str,), None) for k in ("tool_confirm_prompt", "tool_declined_ack", "tool_lead_ack", "tool_callback_ack")},
+    "alert_webhook_url": ((str,), lambda v: not v.strip() or v.strip().startswith("https://")),
+    "alert_stuck_minutes": ((int, float), _num(1, 1440)), "alert_failed_sends_per_hour": ((int,), _num(0, 10000)),
+    "erasure_confirm_prompt": ((str,), lambda v: bool(v.strip())), "erasure_confirm_prompt_en": ((str,), None),
+    "consent_yes_ack": ((str,), lambda v: bool(v.strip())), "consent_yes_ack_en": ((str,), None),
+    "consent_no_ack": ((str,), lambda v: bool(v.strip())), "consent_no_ack_en": ((str,), None),
+    "lead_capture_enabled": ((bool,), None), "info_collection_enabled": ((bool,), None),
+    **{k: ((str,), lambda v: "{fields}" in v) for k in ("lead_prompt",)},
+    **{f"{k}_en": ((str,), lambda v: not v.strip() or "{fields}" in v) for k in ("lead_prompt",)},
+    "lead_thanks": ((str,), lambda v: bool(v.strip())), "lead_thanks_en": ((str,), None),
+    "lead_declined_ack": ((str,), lambda v: bool(v.strip())), "lead_declined_ack_en": ((str,), None),
+    "program_followup_enabled": ((bool,), None),
+    **{k: ((str,), lambda v: bool(v.strip())) for k in ("program_district_prompt", "program_nearby_none", "handover_offer")},
+    "program_nearby_reply": ((str,), lambda v: "{program_name}" in v and "{place}" in v),
+    **{f"{k}_en": ((str,), None) for k in ("program_district_prompt", "program_nearby_reply", "program_nearby_none", "handover_offer")},
+    "reply_styles": ((dict,), _valid_styles),
+    **{k: ((str,), lambda v: bool(v.strip())) for k in ("lead_complete", "lead_anything_else", "data_saving_reply")},
+    **{f"{k}_en": ((str,), None) for k in ("lead_complete", "lead_anything_else", "data_saving_reply")},
+    "lead_explain": ((str,), lambda v: "{fields}" in v), "lead_explain_en": ((str,), lambda v: not v.strip() or "{fields}" in v),
+    "card_warning": ((str,), lambda v: bool(v.strip())), "card_warning_en": ((str,), None),
+    "debounce_seconds": ((int, float), _num(0, 30)), "debounce_max_seconds": ((int, float), _num(1, 120)),
+    "reply_max_lines": ((int,), _num(0, 40)),
     "smalltalk": ((list,), lambda v: len(v) <= 200 and all(
         isinstance(x, dict) and isinstance(x.get("answer"), str) and x["answer"].strip() and len(x["answer"]) <= 2000
         and isinstance(x.get("answer_en", ""), str) and len(x.get("answer_en", "")) <= 2000
         and isinstance(x.get("questions"), list) and x["questions"]
         and all(isinstance(q, str) and q.strip() and len(q) <= 200 for q in x["questions"]) for x in v)),
-    "embedding_provider": ((str,), lambda v: v in ("hash", "openai", "google")), "embedding_model": ((str,), None),
+    "embedding_provider": ((str,), lambda v: v in ("hash", "openai", "google", "local")), "embedding_model": ((str,), None),
+    "rerank_provider": ((str,), lambda v: v in ("none", "cohere", "local")), "rerank_model": ((str,), None),
+    "rerank_candidates": ((int,), _num(1, 80)),
+    "rerank_min_score": ((int, float, type(None)), lambda v: v is None or 0 <= v <= 1),
 }
 
 
@@ -81,6 +135,86 @@ async def put_settings(body: dict, session: AsyncSession = Depends(get_session))
         await set_setting(session, k, v)
     await session.commit()
     return await get_settings_api(session)
+
+
+class LocalEmbeddingIn(BaseModel):
+    base_url: str = Field(min_length=1, max_length=255)
+    api_key: str | None = None
+    enabled: bool = True
+
+
+@router.get("/embeddings/status")
+async def embeddings_status(session: AsyncSession = Depends(get_session)):
+    out = await embedding_status(session)
+    local = (await session.execute(select(LLMProviderConfig).where(LLMProviderConfig.name == "local"))).scalar_one_or_none()
+    out["local"] = {"enabled": bool(local and local.enabled), "base_url": local.base_url if local else None,
+                    "has_key": bool(local and local.api_key_enc)}
+    return out
+
+
+@router.put("/embeddings/local")
+async def put_local_embedding(body: LocalEmbeddingIn, session: AsyncSession = Depends(get_session)):
+    cfg = (await session.execute(select(LLMProviderConfig).where(LLMProviderConfig.name == "local"))).scalar_one_or_none()
+    if cfg is None:
+        cfg = LLMProviderConfig(name="local")
+        session.add(cfg)
+    cfg.enabled, cfg.base_url, cfg.allow_pii = body.enabled, body.base_url.rstrip("/"), False
+    if body.api_key:
+        cfg.api_key_enc = crypto.encrypt(body.api_key, aad="llm:local")
+    await session.commit()
+    return {"enabled": cfg.enabled, "base_url": cfg.base_url, "has_key": bool(cfg.api_key_enc)}
+
+
+class RerankProviderIn(BaseModel):
+    base_url: str = Field(min_length=1, max_length=255)
+    api_key: str | None = None
+    enabled: bool = True
+    allow_pii: bool = False
+    timeout_s: float = Field(30, ge=1, le=120)
+
+
+@router.get("/rerank/providers")
+async def rerank_providers(session: AsyncSession = Depends(get_session)):
+    rows = {c.name: c for c in (await session.execute(select(LLMProviderConfig).where(
+        LLMProviderConfig.name.in_(("rerank_cohere", "rerank_local"))))).scalars()}
+    result = []
+    for name, default_url in (("cohere", "https://api.cohere.com"),
+                              ("local", "http://host.docker.internal:7998")):
+        cfg = rows.get(f"rerank_{name}")
+        result.append({"name": name, "enabled": bool(cfg and cfg.enabled),
+                       "base_url": cfg.base_url if cfg and cfg.base_url else default_url,
+                       "has_key": bool(cfg and cfg.api_key_enc), "allow_pii": bool(cfg and cfg.allow_pii),
+                       "timeout_s": cfg.timeout_s if cfg else 30})
+    return result
+
+
+@router.put("/rerank/providers/{name}")
+async def put_rerank_provider(name: str, body: RerankProviderIn, session: AsyncSession = Depends(get_session)):
+    if name not in ("cohere", "local"):
+        raise HTTPException(404, "Unknown rerank provider")
+    config_name = f"rerank_{name}"
+    cfg = (await session.execute(select(LLMProviderConfig).where(LLMProviderConfig.name == config_name))).scalar_one_or_none()
+    if cfg is None:
+        cfg = LLMProviderConfig(name=config_name)
+        session.add(cfg)
+    cfg.enabled, cfg.base_url, cfg.allow_pii, cfg.timeout_s = body.enabled, body.base_url.rstrip("/"), body.allow_pii, body.timeout_s
+    if body.api_key:
+        cfg.api_key_enc = crypto.encrypt(body.api_key, aad=f"rerank:{name}")
+    await session.commit()
+    return {"name": name, "enabled": cfg.enabled, "base_url": cfg.base_url,
+            "has_key": bool(cfg.api_key_enc), "allow_pii": cfg.allow_pii, "timeout_s": cfg.timeout_s}
+
+
+@router.post("/embeddings/reembed")
+async def start_reembed(request: Request, session: AsyncSession = Depends(get_session)):
+    status = await embedding_status(session)
+    if status["progress"].get("status") == "running":
+        return {"queued": False, **status}
+    queue = getattr(request.app.state, "queue", None)
+    if queue is None:
+        raise HTTPException(503, "Job queue unavailable")
+    job = await queue.enqueue_job("reembed_all_job", _job_id=f"reembed-{status['version']}")
+    return {"queued": bool(job), **status}
 
 
 @router.get("/budget")
@@ -198,7 +332,8 @@ class RouteIn(BaseModel):
 
 def _route(task: str, r: LLMRoute | None) -> dict:
     if r is None:
-        return {"task": task, "configured": False}
+        mt, temp = _TASK_DEFAULTS.get(task, (400, 0.2))
+        return {"task": task, "configured": False, "max_tokens": mt, "temperature": temp}
     return {"task": task, "configured": True, "primary_provider": r.primary_provider, "primary_model": r.primary_model,
             "fallback_provider": r.fallback_provider, "fallback_model": r.fallback_model, "max_tokens": r.max_tokens, "temperature": r.temperature}
 

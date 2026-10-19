@@ -1,0 +1,19 @@
+{
+  "next_program_followups": ["Hi", "নেক্সট প্রোগ্রাম কবে?", "Eta abar ki program?", "kothay hobe?", "ami ki jete parbo?"],
+  "next_course_city": ["Next course kobe?", "Dhakai?", "fee koto?", "ar Chottogram e kobe?", "ok thanks"],
+  "course_apply": ["Ami kivabe e course e apply korbo? Er jonno amar ki ki lagbe?", "online e kora jabe?", "ji", "link ta abar dao"],
+  "course_basics": ["Quantum method ki", "course koydin er?", "kon language e hoy?", "amar boyosh 16, korte parbo?"],
+  "short_chat_fee": ["fee?", "eto keno?", "discount ache?"],
+  "office_location": ["Bandarban e apnader office er location daw.", "phone number?", "ar Cox's Bazar e?", "khola kokhon?"],
+  "office_dhaka_en": ["Where is your head office?", "What time does it open?", "Can I visit on Friday?"],
+  "blood_donation": ["রক্ত দিতে চাই", "কোথায় যেতে হবে?", "আমি ঢাকায় থাকি", "B+ রক্ত লাগবে জরুরি"],
+  "this_month_programs": ["e month e ar ki ki program ache?", "sadakayon ki?", "oitay ki registration lage?"],
+  "prajna_jalali": ["Next proga jalali program date kobe?", "kothay?", "ki hoy oikhane?"],
+  "yoga": ["yoga orientation ache?", "meyeder jonno alada?", "kobe?"],
+  "payment_handover": ["course fee koto?", "bkash e taka dibo kivabe?"],
+  "contact_team": ["I want to contact with your team members."],
+  "personal_name": ["Amar name ki?", "tumi amar somporke ki jano?"],
+  "date_today": ["Ajke koi tarik?", "next program kotodin por?"],
+  "unrelated_and_internship": ["আজকের আবহাওয়া কেমন?", "আপনাদের office e internship kora jabe?"],
+  "songhayon_continue": ["নেক্সট প্রোগ্রাম কবে?", "Eta abar ki program?", "Songghayon", "Ji korechi.", "tahole ami ki korte parbo?"]
+}

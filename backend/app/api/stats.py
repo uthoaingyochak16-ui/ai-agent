@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import any_staff
 from app.db.session import get_session
 from app.llm.service import budget_state
+from app.services.embedding_maintenance import embedding_status
 from app.models import ChannelIdentity, Conversation, LLMCall, Message, UnansweredQuestion
 
 router = APIRouter(prefix="/api/stats", tags=["stats"], dependencies=[Depends(any_staff)])
@@ -50,20 +51,34 @@ async def dashboard(days: int = Query(14, ge=1, le=180), session: AsyncSession =
         select(path, func.count()).select_from(Message).join(Conversation, Message.conversation_id == Conversation.id)
         .join(ChannelIdentity, Conversation.channel_identity_id == ChannelIdentity.id)
         .where(Message.role == "assistant", Message.created_at >= since, REAL).group_by(path))).all()]
-    un_open = (await session.execute(select(func.count()).select_from(UnansweredQuestion).where(UnansweredQuestion.resolved.is_(False)))).scalar_one()
-    un_recent = [{"id": u.id, "question": u.question, "channel": u.channel, "reason": u.reason, "created_at": u.created_at}
-                 for u in (await session.execute(select(UnansweredQuestion).where(UnansweredQuestion.resolved.is_(False))
-                                                 .order_by(UnansweredQuestion.id.desc()).limit(8))).scalars()]
+    is_open = UnansweredQuestion.status.in_(("new", "reviewing"))
+    un_open = (await session.execute(select(func.count()).select_from(UnansweredQuestion).where(is_open))).scalar_one()
+    un_recent = [{"id": u.id, "question": u.question, "channel": u.channel, "reason": u.reason, "created_at": u.created_at,
+                  "occurrences": u.occurrences, "status": u.status, "suggested_category": u.suggested_category}
+                 for u in (await session.execute(select(UnansweredQuestion).where(is_open)
+                                                 .order_by(UnansweredQuestion.occurrences.desc(), UnansweredQuestion.id.desc())
+                                                 .limit(8))).scalars()]
+    count = lambda *w: select(func.count()).select_from(UnansweredQuestion).where(is_open, *w)  # noqa: E731
+    learning_stats = {
+        "repeated": (await session.execute(count(UnansweredQuestion.occurrences >= 2))).scalar_one(),
+        "feedback": (await session.execute(count(UnansweredQuestion.reason == "wrong_answer"))).scalar_one(),
+        "pending_approval": (await session.execute(count(UnansweredQuestion.draft_answer.is_not(None)))).scalar_one(),
+        "topics": [{"category": c or "General", "questions": n, "asked": int(t or 0)} for c, n, t in (await session.execute(
+            select(UnansweredQuestion.suggested_category, func.count(), func.sum(UnansweredQuestion.occurrences))
+            .where(is_open).group_by(UnansweredQuestion.suggested_category)
+            .order_by(func.sum(UnansweredQuestion.occurrences).desc()).limit(6))).all()]}
     handover = [{"id": c.id, "channel": i.channel, "reason": c.handover_reason, "last_message_at": c.last_message_at,
                  "name": i.display_name} for c, i in (await session.execute(
         select(Conversation, ChannelIdentity).join(ChannelIdentity, Conversation.channel_identity_id == ChannelIdentity.id)
         .where(Conversation.status == "handover", REAL).order_by(Conversation.last_message_at.desc().nullslast()).limit(20))).all()]
     b = await budget_state(session)
+    embeddings = await embedding_status(session)
     totals = {"messages_in": sum(c["user"] for c in channels.values()), "cost": sum(d["cost"] for d in daily),
               "tokens_in": sum(d["tokens_in"] for d in daily), "tokens_out": sum(d["tokens_out"] for d in daily)}
     return {"days": days, "channels": list(channels.values()), "daily": daily, "paths": paths, "totals": totals,
-            "unanswered": {"open": un_open, "recent": un_recent}, "handover": handover,
-            "budget": {"spent": float(b.spent), "budget": float(b.budget), "percent": round(b.percent, 1), "level": b.level}}
+            "unanswered": {"open": un_open, "recent": un_recent, **learning_stats}, "handover": handover,
+            "budget": {"spent": float(b.spent), "budget": float(b.budget), "percent": round(b.percent, 1), "level": b.level},
+            "embeddings": embeddings}
 
 
 @router.get("/cost")
@@ -98,6 +113,7 @@ class ResolveIn(BaseModel):
 
 @router.post("/unanswered/{uid}/resolve")
 async def resolve_unanswered(uid: int, body: ResolveIn, session: AsyncSession = Depends(get_session)):
-    await session.execute(update(UnansweredQuestion).where(UnansweredQuestion.id == uid).values(resolved=body.resolved))
+    await session.execute(update(UnansweredQuestion).where(UnansweredQuestion.id == uid).values(
+        resolved=body.resolved, status="ignored" if body.resolved else "new"))
     await session.commit()
     return {"ok": True}

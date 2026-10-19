@@ -51,6 +51,14 @@ async def test_question_is_not_answered_with_a_greeting(maker):
         assert FIRST not in await assistant_texts(s)
 
 
+async def test_payment_question_is_handed_to_a_human_agent(maker):
+    async with maker() as s:
+        r = await handle_message(s, mk_msg(uid="test:payment", text="Payment method ki?", mid="payment-1"))
+        assert r.conversation.ai_paused and r.conversation.status == "handover"
+        assert r.conversation.handover_reason == "payment_request"
+        assert (await assistant_texts(s))[-1] == DEFAULTS["handover_ack"]
+
+
 @respx.mock
 async def test_typing_bubble_and_messenger_profile_photo(maker):
     async with maker() as s:
@@ -122,3 +130,23 @@ async def test_retention_deletes_old_chats_but_keeps_the_profile(maker):
         assert await s.get(Profile, profile_id) is not None
         assert (await s.execute(select(ProfileFact.value))).scalar_one() == "Dhaka"
         assert (await s.execute(select(func.count()).select_from(ChannelIdentity))).scalar_one() == 1
+
+
+@respx.mock
+async def test_replies_off_still_reads_the_guest_but_sends_nothing(maker):
+    from app.models import ChannelConfig
+    async with maker() as s:
+        await configure_channel(s)
+        (await s.execute(select(ChannelConfig))).scalar_one().enabled = False   # "Replies enabled" switched off
+        await s.commit()
+    route = respx.post(GRAPH).mock(return_value=httpx.Response(200, json={"message_id": "out"}))
+    respx.get("https://graph.facebook.com/v21.0/PSIDOFF").mock(return_value=httpx.Response(
+        200, json={"first_name": "Rahim", "last_name": "Uddin", "profile_pic": "https://cdn.example/r.jpg"}))
+    async with maker() as s:
+        await handle_message(s, mk_msg(uid="PSIDOFF", text="hi", mid="off1"))
+        ident = (await s.execute(select(ChannelIdentity))).scalar_one()
+        assert ident.display_name == "Rahim Uddin" and ident.avatar_url == "https://cdn.example/r.jpg"
+        bot = (await s.execute(select(Message).where(Message.role == "assistant"))).scalar_one()
+        assert bot.delivery_status == "failed" and bot.flag == "replies_off"
+    actions = [json.loads(c.request.content).get("sender_action") for c in route.calls]
+    assert "typing_on" not in actions and not any("message" in json.loads(c.request.content) for c in route.calls)

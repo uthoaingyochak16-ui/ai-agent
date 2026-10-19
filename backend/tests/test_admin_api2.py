@@ -5,6 +5,7 @@ import pytest
 import respx
 from sqlalchemy import func, select
 
+from app.rag.categories import CATEGORIES
 from app.models import (Chunk, ChannelIdentity, Conversation, Document, LLMCall, Message, Profile, QAPair, SemanticCache,
                         UnansweredQuestion)
 from app.rag.documents import LocalStorage, process_document
@@ -107,7 +108,7 @@ async def test_qa_crud_csv_roundtrip_and_variables(client, admin, maker):
     imp = (await client.post("/api/qa-import", headers=admin, files={"file": ("q.csv", csv_in.encode())})).json()
     assert imp["created"] == 2 and imp["updated"] == 1
     lst = (await client.get("/api/qa", headers=admin, params={"search": "phone"})).json()
-    assert lst["total"] == 1 and lst["categories"] == ["info", "x"]
+    assert lst["total"] == 1 and lst["categories"] == list(CATEGORIES)  # free-typed names map to the standard list ("Other")
     where = [q for q in (await client.get("/api/qa", headers=admin)).json()["items"] if q["id"] == qid][0]
     assert where["answer_template"] == "Updated {address}" and where["active"] is False
     exported = (await client.get("/api/qa-export", headers=admin)).text
@@ -121,6 +122,27 @@ async def test_qa_crud_csv_roundtrip_and_variables(client, admin, maker):
     async with maker() as s:
         from app.services.settings_service import get_setting
         assert await get_setting(s, "context_version") > 1                                            # cache invalidated by edits
+
+
+async def test_qa_import_without_category_guesses_it(client, admin):
+    kept = (await client.post("/api/qa", headers=admin, json={"question": "রক্ত কোথায় দেব?", "answer_template": "x",
+                                                              "category": "Contact & Address"})).json()
+    csv_in = "question,answer\nকোর্সের ফি কত?,৫০০ টাকা\nরক্ত কোথায় দেব?,y\nhello there,hi\n"
+    imp = (await client.post("/api/qa-import", headers=admin, files={"file": ("q.csv", csv_in.encode())})).json()
+    assert imp["created"] == 2 and imp["updated"] == 1
+    cats = {q["question"]: q["category"] for q in (await client.get("/api/qa", headers=admin)).json()["items"]}
+    assert cats["কোর্সের ফি কত?"] == "Fees & Payment" and cats["hello there"] == "General"
+    assert cats[kept["question"]] == "Contact & Address"          # an existing Q&A keeps the category it already has
+    added = (await client.post("/api/qa", headers=admin, json={"question": "blood donate korbo", "answer_template": "x"})).json()
+    assert added["category"] == "Blood Donation"                 # the editor left it empty: guessed too
+
+
+async def test_variable_usage_lists_every_variable_active_answers_use(client, admin):
+    for q, a, active in (("fee?", "Fee {course_fee}, call {phone}", True), ("fee koto", "{course_fee}", True),
+                         ("old", "{retired_var}", False)):
+        await client.post("/api/qa", headers=admin, json={"question": q, "answer_template": a, "active": active})
+    usage = (await client.get("/api/variables/usage", headers=admin)).json()
+    assert usage == {"course_fee": {"count": 2, "examples": ["fee?", "fee koto"]}, "phone": {"count": 1, "examples": ["fee?"]}}
 
 
 async def test_saving_a_correction_resolves_the_unanswered_question(client, admin, maker):
@@ -153,7 +175,7 @@ async def test_ai_settings_validation_and_secret_handling(client, admin, agent, 
     assert m.status_code == 200 and (await client.get("/api/ai/models", headers=admin)).json()[0]["output_price"] == 5
     r = await client.put("/api/ai/routes/answer", headers=admin, json={"primary_provider": "anthropic", "primary_model": "x", "fallback_provider": "", "fallback_model": ""})
     assert r.json()["fallback_provider"] is None
-    assert [x["configured"] for x in (await client.get("/api/ai/routes", headers=admin)).json()] == [True, False, False, False]
+    assert [x["configured"] for x in (await client.get("/api/ai/routes", headers=admin)).json()] == [True, False, False, False, False, False, False, False]  # answer, answer_large, rewrite, keywords, keygen, router, extraction, summarization
 
 
 @respx.mock
@@ -218,7 +240,7 @@ async def test_chat_no_save_uses_client_history_and_selected_profile(client, adm
     prompt = json.dumps(r.json()["debug"]["prompt"])
     assert "hello there" in prompt and "hi! how can I help" in prompt
     assert "PROFILE: name: [NAME_1]; profession: Driver" in prompt and "Karim" not in prompt
-    assert r.json()["debug"]["profile_injected"]["missing_fields"][0] == "phone"
+    assert r.json()["debug"]["profile_injected"]["missing_fields"] == []  # extra details are asked only when needed
     assert (await client.get(f"/api/profiles/{pr['id']}", headers=admin)).json()["identities"] == []     # nothing was linked
 
 
@@ -227,7 +249,7 @@ async def test_chat_saved_mode_runs_handover_and_consent_like_a_customer(client,
     send = lambda m: client.post("/api/test-chat", headers=admin, json={"message": m, "session_id": sid})  # noqa: E731
     first = (await send("what are the shop opening hours?")).json()
     second = (await send("and what are the hours on friday?")).json()
-    assert "may I save your name" in second["messages"][-1]["content"] and second["profile"]["consent"] == "asked"
+    assert "may i save your name" in second["messages"][-1]["content"].lower() and second["profile"]["consent"] == "asked"
     third = (await send("yes")).json()
     assert third["profile"]["consent"] == "given"
     hand = (await send("I want a human agent")).json()

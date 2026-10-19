@@ -100,17 +100,32 @@ class GoogleEmbedder(_HttpEmbedder):
         return out
 
 
+class LocalEmbedder(OpenAIEmbedder):
+    """Self-hosted OpenAI-compatible embeddings (for example bge-m3 via vLLM/Infinity)."""
+    name, default_base = "local", "http://host.docker.internal:7997"
+
+
+async def embedding_signature(session: AsyncSession, *, embedder=None) -> str:
+    if embedder is not None:
+        emb = embedder[0] if isinstance(embedder, tuple) else embedder
+        model = getattr(emb, "model", "hash-ngram-v1")
+        return f"{emb.name}:{model}:{emb.dim}"
+    name = await get_setting(session, "embedding_provider") or "hash"
+    model = "hash-ngram-v1" if name == "hash" else (await get_setting(session, "embedding_model") or "")
+    return f"{name}:{model}:{get_settings().embedding_dim}"
+
+
 async def get_embedder(session: AsyncSession) -> tuple[Embedder, ProviderPolicy]:
     dim = get_settings().embedding_dim
     name = await get_setting(session, "embedding_provider") or "hash"
     if name == "hash":
         return HashingEmbedder(dim), ProviderPolicy(name="hash", allow_pii=True)
     cfg = (await session.execute(select(LLMProviderConfig).where(LLMProviderConfig.name == name))).scalar_one_or_none()
-    if cfg is None or not cfg.enabled or not cfg.api_key_enc:
+    if cfg is None or not cfg.enabled or (name != "local" and not cfg.api_key_enc):
         raise LLMError(f"embedding provider '{name}' is not configured")
     model = await get_setting(session, "embedding_model") or ""
-    key = crypto.decrypt(cfg.api_key_enc, aad=f"llm:{name}")
-    cls = {"openai": OpenAIEmbedder, "google": GoogleEmbedder}[name]
+    key = crypto.decrypt(cfg.api_key_enc, aad=f"llm:{name}") if cfg.api_key_enc else ""
+    cls = {"openai": OpenAIEmbedder, "google": GoogleEmbedder, "local": LocalEmbedder}[name]
     return cls(dim, key, model, cfg.base_url, cfg.timeout_s), ProviderPolicy(name=name, allow_pii=cfg.allow_pii)
 
 

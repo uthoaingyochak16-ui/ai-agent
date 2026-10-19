@@ -6,7 +6,7 @@ from app.channels.base import (ChannelAdapter, ChannelCredentials, IncomingMessa
 from app.channels.graph import GraphError, graph_request
 
 # (code, subcode) pairs Meta returns when the 24h/7d window is closed. Verify against Meta's error reference.
-_WINDOW_ERRORS = {(10, 2018278)}
+_WINDOW_ERRORS = {(10, 2018278), (10, 2534022)}  # both mean "sent outside the allowed window" (Messenger error-codes page)
 
 
 class _MetaMessagingAdapter(ChannelAdapter):

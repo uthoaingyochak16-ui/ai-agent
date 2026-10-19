@@ -9,7 +9,7 @@ from app.api.deps import admin_only, any_staff
 from app.db.session import get_session
 from app.models import Chunk, Document
 from app.rag.documents import bump_context_version, get_storage
-from app.rag.embeddings import embed_texts
+from app.rag.embeddings import embed_texts, embedding_signature
 from app.rag.extract import MEDIA_TYPES, sniff
 
 router = APIRouter(prefix="/api/documents", tags=["knowledge base"])
@@ -99,6 +99,7 @@ class ChunkIn(BaseModel):
 async def _save_chunk(session: AsyncSession, chunk: Chunk, body: ChunkIn) -> dict:
     chunk.content, chunk.question = body.content.strip(), (body.question or "").strip() or None
     chunk.embedding = (await embed_texts(session, [chunk.content]))[0]
+    chunk.embedding_version = await embedding_signature(session)
     await bump_context_version(session)  # cache + keyword index pick up the edit
     await session.commit()
     return {"id": chunk.id, "position": chunk.position, "page": chunk.page_no, "words": len(chunk.content.split()),
@@ -126,7 +127,8 @@ async def add_chunk(doc_id: int, body: ChunkIn, session: AsyncSession = Depends(
     d = await _ready_doc(session, doc_id)
     pos = ((await session.execute(select(func.max(Chunk.position)).where(Chunk.document_id == doc_id))).scalar_one() or 0) + 1
     vec = (await embed_texts(session, [body.content.strip()]))[0]  # before add(): the row must never flush without it
-    c = Chunk(document_id=doc_id, position=pos, content=body.content.strip(), embedding=vec)
+    c = Chunk(document_id=doc_id, position=pos, content=body.content.strip(), embedding=vec,
+              embedding_version=await embedding_signature(session))
     session.add(c)
     d.chunk_count += 1
     return await _save_chunk(session, c, body)

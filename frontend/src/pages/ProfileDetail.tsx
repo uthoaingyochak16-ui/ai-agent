@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, Download, GitMerge, MessageSquare, Pencil, Plus, Trash2, Undo2, UserRound, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { Avatar, Badge, Button, ChannelBadge, Empty, ErrorNote, Field, IconButton, Input, Modal, Panel, Select, Spinner, Tabs, useToast, useConfirm } from "../components/ui";
+import { Avatar, Badge, Button, ChannelBadge, Empty, ErrorNote, Field, IconButton, Input, Modal, Panel, Select, Spinner, Tabs, Textarea, useToast, useConfirm } from "../components/ui";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { when } from "../lib/format";
@@ -138,6 +138,7 @@ function Overview({ d, locked, onChange }: { d: any; locked: boolean; onChange: 
             ))}
           </div>
         )}
+        <Family d={d} locked={locked} onChange={onChange} />
       </div>
       <div className="space-y-5">
         <Panel title="What the AI knows">
@@ -153,6 +154,65 @@ function Overview({ d, locked, onChange }: { d: any; locked: boolean; onChange: 
         </Panel>
       </div>
     </div>
+  );
+}
+
+const RELATIONS = ["mother", "father", "husband", "wife", "son", "daughter", "brother", "sister", "grandfather", "grandmother", "uncle", "aunt", "cousin", "child"];
+const BLOOD = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
+const label = (k: string) => k.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+type Member = { id?: number; relation: string; name: string; age: string; blood_group: string; details: string };
+
+/** Relatives the guest talked about: one card per person, so every age / blood group / problem has an owner. */
+function Family({ d, locked, onChange }: { d: any; locked: boolean; onChange: () => void }) {
+  const toast = useToast();
+  const ask = useConfirm();
+  const [edit, setEdit] = useState<Member | null>(null);
+  const save = useMutation({
+    mutationFn: (m: Member) => api(`/api/profiles/${d.id}/family${m.id ? `/${m.id}` : ""}`, { method: "PUT", body: {
+      relation: m.relation, name: m.name.trim() || null, age: m.age === "" ? null : Number(m.age), blood_group: m.blood_group || null,
+      details: Object.fromEntries(m.details.split("\n").map((l) => l.split(":")).filter((p) => p.length > 1 && p[0].trim() && p.slice(1).join(":").trim()).map((p) => [p[0].trim(), p.slice(1).join(":").trim()])) } }),
+    onSuccess: () => { toast("Saved"); setEdit(null); onChange(); },
+  });
+  const del = useMutation({ mutationFn: (fid: number) => api(`/api/profiles/${d.id}/family/${fid}`, { method: "DELETE" }), onSuccess: () => { toast("Removed"); onChange(); } });
+  const open = (m?: any) => setEdit(m ? { id: m.id, relation: m.relation, name: m.name ?? "", age: m.age == null ? "" : String(m.age), blood_group: m.blood_group ?? "",
+    details: Object.entries(m.details ?? {}).map(([k, v]) => `${label(k)}: ${v}`).join("\n") } : { relation: "mother", name: "", age: "", blood_group: "", details: "" });
+  const family: any[] = d.family ?? [];
+  return (
+    <Panel title="Family members" actions={!locked && <Button size="sm" onClick={() => open()}><Plus className="h-4 w-4" aria-hidden />Add</Button>}>
+      {!family.length ? <p className="text-sm text-muted">None yet. When the guest talks about a relative (“amar ma-r diabetes”, “my son is in class 5”), the AI adds them here, each person separately.</p> : (
+        <ul className="grid gap-3 md:grid-cols-2">{family.map((m) => (
+          <li key={m.id} className="rounded-ctl border border-line p-3">
+            <div className="flex items-start gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold">{label(m.relation)}{m.name ? `: ${m.name}` : ""}</p>
+                <p className="text-xs text-muted">{[m.age != null && `${m.age} years`, m.blood_group && `Blood ${m.blood_group}`].filter(Boolean).join(" · ") || "Age and blood group unknown"}</p>
+              </div>
+              {m.source === "ai" ? <Badge tone="accent"><Bot className="h-3 w-3" aria-hidden />AI</Badge> : <Badge tone="blue"><UserRound className="h-3 w-3" aria-hidden />Staff</Badge>}
+              {!locked && <>
+                <IconButton label={`Edit ${m.relation}`} className="h-7 w-7" onClick={() => open(m)}><Pencil className="h-3.5 w-3.5" aria-hidden /></IconButton>
+                <IconButton label={`Remove ${m.relation}`} className="h-7 w-7" onClick={async () => (await ask({ title: `Remove ${m.relation}${m.name ? ` ${m.name}` : ""}?`, message: "This person and their details are deleted from the profile.", confirmLabel: "Remove", danger: true })) && del.mutate(m.id)}><X className="h-3.5 w-3.5" aria-hidden /></IconButton>
+              </>}
+            </div>
+            {Object.keys(m.details ?? {}).length > 0 && <dl className="mt-2 space-y-1 border-t border-line pt-2 text-sm">{Object.entries(m.details).map(([k, v]) => (
+              <div key={k} className="flex gap-2"><dt className="shrink-0 text-muted">{label(k)}:</dt><dd className="break-words">{String(v)}</dd></div>))}</dl>}
+          </li>))}</ul>
+      )}
+      {edit && <Modal title={edit.id ? "Edit family member" : "Add family member"} onClose={() => setEdit(null)}>
+        <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); save.mutate(edit); }}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Relation">{(i) => <Select id={i} persistDraft={false} value={edit.relation} onChange={(e) => setEdit({ ...edit, relation: e.target.value })}>
+              {[...new Set([...RELATIONS, edit.relation])].map((r) => <option key={r} value={r}>{label(r)}</option>)}</Select>}</Field>
+            <Field label="Name">{(i) => <Input id={i} persistDraft={false} value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} />}</Field>
+            <Field label="Age">{(i) => <Input id={i} persistDraft={false} type="number" min={0} max={120} value={edit.age} onChange={(e) => setEdit({ ...edit, age: e.target.value })} />}</Field>
+            <Field label="Blood group">{(i) => <Select id={i} persistDraft={false} value={edit.blood_group} onChange={(e) => setEdit({ ...edit, blood_group: e.target.value })}>
+              <option value="">Unknown</option>{BLOOD.map((b) => <option key={b} value={b}>{b}</option>)}</Select>}</Field>
+          </div>
+          <Field label="Other details" hint="One per line, as “what: value”, e.g. “Health problems: diabetes” or “Class: 5”.">{(i) => <Textarea id={i} persistDraft={false} rows={4} value={edit.details} onChange={(e) => setEdit({ ...edit, details: e.target.value })} />}</Field>
+          <ErrorNote error={save.error} />
+          <div className="flex justify-end gap-2"><Button onClick={() => setEdit(null)}>Cancel</Button><Button type="submit" variant="primary" loading={save.isPending}>Save</Button></div>
+        </form>
+      </Modal>}
+    </Panel>
   );
 }
 

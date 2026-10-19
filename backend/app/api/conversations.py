@@ -11,6 +11,7 @@ from app.db.session import get_session
 from app.models import AdminUser, ChannelIdentity, Conversation, Message, Profile
 from app.services.handover import pause_ai, resume_ai
 from app.channels.registry import get_adapter
+from app.services import security
 from app.services.outbound import TEST_PREFIX, SendFailed, get_credentials, send_to_conversation
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"], dependencies=[Depends(any_staff)])
@@ -95,7 +96,7 @@ async def typing(conv_id: int, session: AsyncSession = Depends(get_session)):
     last_in = (await session.execute(select(Message.external_message_id).where(
         Message.conversation_id == c.id, Message.role == "user").order_by(Message.id.desc()).limit(1))).scalar_one_or_none()
     try:
-        await get_adapter(i.channel).show_typing(i.external_id, last_in, await get_credentials(session, i.channel))
+        await get_adapter(i.channel).show_typing(i.external_id, last_in, await get_credentials(session, i.channel, account_id=i.account_id))
     except Exception:  # noqa: BLE001 - channel off, window closed, missing permission...
         return {"ok": False}
     return {"ok": True}
@@ -120,6 +121,8 @@ async def reply(conv_id: int, body: ReplyIn, user: AdminUser = Depends(any_staff
         raise HTTPException(404, "Not found")
     if not body.text.strip() and not body.template:
         raise HTTPException(422, "text or template required")
+    if security.asks_for_card(body.text):
+        raise HTTPException(422, "Card numbers, CVV, PIN and OTP are never asked for. Remove that from the message.")
     if not c.ai_paused:  # a human taking over implies pausing the AI
         await pause_ai(session, c, f"agent:{user.email}")
     tpl = TemplateMessage(**body.template.model_dump()) if body.template else None

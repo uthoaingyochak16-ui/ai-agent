@@ -1,10 +1,11 @@
 import json
+import time
 
 import pytest
 from sqlalchemy import func, select
 
 from app.llm.service import LLMService
-from app.models import (Chunk, Conversation, Document, LLMCall, Message, Profile, QAPair, SemanticCache,
+from app.models import (Chunk, Conversation, Document, LLMCall, LLMRoute, Message, Profile, QAPair, SemanticCache,
                         UnansweredQuestion, Variable)
 from app.rag.documents import LocalStorage, process_document
 from app.rag.embeddings import HashingEmbedder
@@ -68,6 +69,46 @@ async def test_qa_with_unresolved_variable_is_not_sent_to_the_user(env):
     assert "{address}" not in res.text and res.path != "qa_shortcut"
 
 
+async def test_qa_with_unresolved_variable_hands_the_rest_of_its_answer_to_the_ai(env):
+    env.session.add(Variable(key="open_time", value="9 am"))
+    await add_qa(env.session, "Where are you located?", "Visit us at {address}. We open at {open_time} every day.")
+    res = await ask(env, "Where are you located?")
+    assert res.path.startswith("llm") and res.text == "Answer from small model"
+    sent = json.dumps([m for _, req in env.fake.calls for m in req.messages], ensure_ascii=False, default=str)
+    assert "We open at 9 am every day." in sent and "Visit us at" not in sent and "{address}" not in sent
+    assert any("goes to the AI" in s for s in res.debug["steps"])
+
+
+async def test_fee_question_without_a_program_is_answered_from_qa(env):
+    env.session.add(Variable(key="course_fee", value="১১,৫০০ টাকা"))
+    await add_qa(env.session, "কোর্সের ফি কত?", "কোর্সের ফি {course_fee}।")
+    res = await ask(env, "কোর্সের ফি কত?")
+    assert res.path == "qa_shortcut" and res.text == "কোর্সের ফি ১১,৫০০ টাকা।" and env.fake.calls == []
+
+
+@pytest.mark.parametrize("text", ["মানি রিসিট লাগবে", "বিকাশে টাকা কেটে গেছে", "আমি যেতে পারব না, টাকা ফেরত পাব?",
+                                  "Can I pay in instalments?", "I paid but did not get confirmation", "taka pathaisi"])
+async def test_payment_questions_go_to_a_person_and_never_to_the_ai(env, text):
+    await add_qa(env.session, text, "Some saved answer")
+    res = await ask(env, text)
+    assert res.path == "payment_disabled" and env.fake.calls == []
+
+
+async def test_the_routers_reading_of_the_request_reaches_the_answering_model(env):
+    res = await run_pipeline(env.session, env.llm, text="shipping kemon?", profile=None, conversation=None,
+                             channel="messenger", persist=False, guest_request="How long delivery takes and what it costs")
+    sent = json.dumps([m for _, req in env.fake.calls if _ in ("small", "big") for m in req.messages], ensure_ascii=False)
+    assert "(WHAT THE GUEST WANTS: How long delivery takes and what it costs)" in sent and "shipping kemon?" in sent
+    assert res.debug["guest_request"] == "How long delivery takes and what it costs"
+
+
+def test_fill_known_drops_only_the_sentences_that_need_a_missing_value():
+    from app.rag.templates import fill_known
+    assert fill_known("রক্ত লাগলে জানান। বিস্তারিত: {blood_info}", {}) == "রক্ত লাগলে জানান।"
+    assert fill_known("Fee {fee}! Call {phone}.\nBye", {"phone": "123"}) == "Call 123. Bye"
+    assert fill_known("{about_org}", {}) == ""
+
+
 async def test_high_similarity_qa_shortcut(env):
     await set_setting(env.session, "qa_threshold", 0.8)
     await add_qa(env.session, "What are your opening hours?", "9 to 5.")
@@ -85,6 +126,7 @@ async def test_inactive_qa_is_ignored(env):
 # ------------------------------------------------------------------------------------------- retrieval + LLM
 async def test_rag_answer_uses_top_k_chunks_small_model_and_returns_debug(env):
     await set_setting(env.session, "top_k", 2)
+    await set_setting(env.session, "keyword_search_enabled", False)   # this test is about the hybrid (vector + keyword) fallback
     res = await ask(env, "when is the shop open, what are the hours of the shop")
     assert res.path == "llm" and res.text == "Answer from small model" and env.fake.models() == ["small"]
     assert len(res.debug["chunks"]) == 2 and res.debug["chunks"][0]["document"] == "Hours"
@@ -119,6 +161,14 @@ async def test_nothing_relevant_gives_canned_reply_without_calling_the_llm_and_l
     assert res.path == "no_context" and env.fake.calls == [] and "don't have" in res.text
     row = (await env.session.execute(select(UnansweredQuestion))).scalar_one()
     assert row.question == "xyz qwerty zzz"
+
+
+async def test_general_answer_fallback_uses_the_model_only_when_enabled(env):
+    await set_setting(env.session, "retrieval_min_similarity", 0.99)
+    await set_setting(env.session, "general_answer_enabled", True)
+    res = await ask(env, "what is the capital of Japan?", persist=False)
+    assert res.path == "llm" and res.text == "Answer from small model"
+    assert "GENERAL ANSWER MODE" in json.dumps(res.debug["prompt"])
 
 
 async def test_llm_unavailable_answers_from_the_matching_text_or_degrades_to_canned_reply(env, session):
@@ -200,9 +250,9 @@ async def test_profile_summary_and_missing_fields_only_after_consent(env):
     await env.session.commit()
     res = await ask(env, "what are the shop hours", profile=p, conv=r.conversation)
     last = res.debug["prompt"]["messages"][-1]["content"]
-    assert "PROFILE: name: [NAME_1]; profession: Teacher" in last and "MISSING: phone, email, location, age" in last
+    assert "PROFILE: name: [NAME_1]; profession: Teacher" in last and "MISSING" not in last  # asked only when a request needs it
     assert "Rahim" not in json.dumps(res.debug["prompt"])
-    assert res.debug["profile_injected"]["missing_fields"][0] == "phone"
+    assert res.debug["profile_injected"]["missing_fields"] == []
     # without consent the model is not even told what to collect
     r2 = await resolve(env.session, mk_msg("messenger", "P2", "hi", "2"))
     res2 = await ask(env, "what are the shop hours", profile=r2.profile, conv=r2.conversation)
@@ -221,8 +271,29 @@ async def test_history_is_limited_and_current_message_excluded(env):
     assert sent.count("what are the shop hours") == 1
 
 
+async def test_short_follow_up_is_rewritten_before_qa_retrieval_and_original_reaches_answer_prompt(env):
+    env.session.add(LLMRoute(task="rewrite", primary_provider="anthropic", primary_model="rewrite",
+                             fallback_provider=None, fallback_model=None, max_tokens=80, temperature=0))
+    await add_qa(env.session, "What are your opening hours?", "We are open 9 to 5.")
+    await env.session.commit()
+    env.fake.script["rewrite"] = "What are your opening hours?"
+    res = await ask(env, "Oita koto?", history=[("user", "Tell me about your opening hours"), ("assistant", "Sure")])
+    assert res.path == "qa_shortcut" and res.text == "We are open 9 to 5."
+    assert res.debug["question_rewrite"] == {"original": "Oita koto?", "rewritten": "What are your opening hours?", "used": True}
+    assert env.fake.models() == ["rewrite"]
+    assert (await env.session.execute(select(LLMCall.task))).scalar_one() == "rewrite"
+
+
+async def test_missing_rewrite_route_keeps_old_short_follow_up_concatenation(env):
+    res = await ask(env, "oita", history=[("user", "What are the shop hours?")])
+    assert res.debug["question_rewrite"]["used"] is False
+    assert res.debug["question_rewrite"]["rewritten"] == "What are the shop hours? oita"
+    assert "Rewrite unavailable" in res.debug["steps"][0]
+
+
 # ------------------------------------------------------------------------------------------- extraction / summaries
 async def test_extraction_saves_fields_after_consent_and_rejects_sensitive(env):
+    await set_setting(env.session, "info_collection_enabled", False)  # the every-N-messages mode
     r = await resolve(env.session, mk_msg("messenger", "E1", "hello", "1"))
     p, conv = r.profile, r.conversation
     await C.record_consent(env.session, p, True)
@@ -242,6 +313,7 @@ async def test_extraction_saves_fields_after_consent_and_rejects_sensitive(env):
 
 
 async def test_extraction_without_consent_holds_values_pending(env):
+    await set_setting(env.session, "info_collection_enabled", False)  # the every-N-messages mode
     r = await resolve(env.session, mk_msg("messenger", "E2", "hello", "1"))
     for i in range(4):
         env.session.add(Message(conversation_id=r.conversation.id, role="user", content_redacted=f"m{i}"))
@@ -252,6 +324,7 @@ async def test_extraction_without_consent_holds_values_pending(env):
 
 
 async def test_extraction_runs_only_every_n_messages_and_tolerates_garbage(env):
+    await set_setting(env.session, "info_collection_enabled", False)  # the every-N-messages mode
     r = await resolve(env.session, mk_msg("messenger", "E3", "hello", "1"))
     env.session.add(Message(conversation_id=r.conversation.id, role="user", content_redacted="one"))
     await env.session.commit()
@@ -286,3 +359,20 @@ async def test_test_chat_questions_do_not_pollute_the_unanswered_list(env):
                        persist=True, is_test=True)
     await env.session.commit()
     assert await env.session.scalar(select(func.count()).select_from(UnansweredQuestion)) == 0
+
+async def test_qa_wording_lookup_stays_fast_with_5000_pairs(env):
+    """The wording shortcut may load its versioned index once, but must not scan every row per message."""
+    embed = (await HashingEmbedder(1024).embed(["seed"]))[0]
+    env.session.add_all([
+        QAPair(question=f"Program registration information {n}", question_norm=normalize_question(f"Program registration information {n}"),
+               answer_template=f"Answer {n}", embedding=embed)
+        for n in range(5000)
+    ])
+    await env.session.commit()
+    # Warm the one-time, context-versioned metadata index outside the measured request.
+    from app.rag.qa_index import active_qa_index
+    await active_qa_index(env.session)
+    started = time.perf_counter()
+    result = await ask(env, "Program registration information 4999")
+    assert result.path == "qa_shortcut" and result.text == "Answer 4999"
+    assert time.perf_counter() - started < 1.0

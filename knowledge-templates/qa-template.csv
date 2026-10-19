@@ -1,0 +1,19 @@
+﻿question,answer,category,active
+আসসালামু আলাইকুম,ওয়ালাইকুম আসসালাম! কোয়ান্টামে আপনাকে স্বাগতম। কীভাবে সাহায্য করতে পারি?,General,true
+assalamu alaikum,ওয়ালাইকুম আসসালাম! কোয়ান্টামে আপনাকে স্বাগতম। কীভাবে সাহায্য করতে পারি?,General,true
+hi,আসসালামু আলাইকুম! কীভাবে সাহায্য করতে পারি?,General,true
+অফিস কখন খোলা থাকে?,আমাদের অফিস খোলা থাকে {office_hours}।,Contact & Address,true
+office kokhon khola?,আমাদের অফিস খোলা থাকে {office_hours}।,Contact & Address,true
+office time ki?,আমাদের অফিস খোলা থাকে {office_hours}।,Contact & Address,true
+What are your office hours?,Our office is open {office_hours}.,Contact & Address,true
+আপনাদের ঠিকানা কী?,আমাদের ঠিকানা: {office_address}। ফোন: {office_phone}।,Contact & Address,true
+apnader address ki?,আমাদের ঠিকানা: {office_address}। ফোন: {office_phone}।,Contact & Address,true
+অফিস কোথায়?,আমাদের ঠিকানা: {office_address}। ফোন: {office_phone}।,Contact & Address,true
+কোর্সের ফি কত?,কোর্সের ফি {course_fee}। বিস্তারিত জানতে {office_phone} নম্বরে যোগাযোগ করুন।,Fees & Payment,true
+course fee koto?,কোর্সের ফি {course_fee}। বিস্তারিত জানতে {office_phone} নম্বরে যোগাযোগ করুন।,Fees & Payment,true
+কোর্স করতে কত টাকা লাগে?,কোর্সের ফি {course_fee}। বিস্তারিত জানতে {office_phone} নম্বরে যোগাযোগ করুন।,Fees & Payment,true
+How much is the course fee?,The course fee is {course_fee}. Call {office_phone} for details.,Fees & Payment,true
+পরের কোর্স কবে?,পরের কোর্স শুরু হবে {next_course_date}।,Courses,true
+next course kobe?,পরের কোর্স শুরু হবে {next_course_date}।,Courses,true
+রেজিস্ট্রেশন কীভাবে করব?,রেজিস্ট্রেশন করতে পারবেন {registration_link} লিংকে অথবা {office_phone} নম্বরে ফোন করে।,Registration,true
+registration kivabe korbo?,রেজিস্ট্রেশন করতে পারবেন {registration_link} লিংকে অথবা {office_phone} নম্বরে ফোন করে।,Registration,true

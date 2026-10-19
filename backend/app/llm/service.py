@@ -85,7 +85,8 @@ class LLMService:
             return row.id
 
     async def run(self, session: AsyncSession, task: str, build: Callable[[ProviderPolicy], GuardedRequest], *,
-                  channel: str | None = None, conversation_id: int | None = None, is_test: bool = False) -> LLMOutcome:
+                  channel: str | None = None, conversation_id: int | None = None, is_test: bool = False,
+                  tools: list | None = None) -> LLMOutcome:
         """`build(policy)` is called once per provider attempt so a fallback provider gets ITS OWN privacy policy."""
         route = (await session.execute(select(LLMRoute).where(LLMRoute.task == task))).scalar_one_or_none()
         if route is None:
@@ -127,7 +128,8 @@ class LLMService:
                           fallback_used=idx > 0 and not budget_mode, budget_fallback=budget_mode and idx == 0,
                           is_test=is_test, redactions=req.report.get("redactions"), request_json=req.audit_payload)
             try:
-                res = await provider.generate(req, model=model, max_tokens=route.max_tokens, temperature=route.temperature)
+                extra = {"tools": tools} if tools else {}  # only tool-aware calls pass it (keeps test fakes simple)
+                res = await provider.generate(req, model=model, max_tokens=route.max_tokens, temperature=route.temperature, **extra)
             except LLMError as exc:
                 last_err = exc
                 await self._log(**common, status="error", error=str(exc)[:500], latency_ms=int((time.perf_counter() - t0) * 1000))
