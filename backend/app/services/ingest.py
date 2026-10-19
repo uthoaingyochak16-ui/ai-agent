@@ -325,7 +325,8 @@ async def _respond(session: AsyncSession, r: Resolved, msg: IncomingMessage, llm
     # 5d) AI reply
     reply = await generate_reply(session, r, question, llm=llm, combined_turns=turns,
                                  standalone_question=decision.standalone_question if decision else None,
-                                 guest_request=decision.request if decision else None)
+                                 guest_request=decision.request if decision else None,
+                                 guest_language=decision.language if decision else None)
     r.debug = reply.debug
     if decision is not None:
         r.debug["router"] = decision.as_debug()

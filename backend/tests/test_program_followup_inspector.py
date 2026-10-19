@@ -67,8 +67,8 @@ async def test_an_ai_written_program_answer_gets_the_quotes_too(session, maker):
     fake = FakeLLM({"small": f"{BATCH} অনুষ্ঠিত হবে ২০–২৩ নভেম্বর, ঢাকা।"})
     r = await run_pipeline(session, LLMService(maker, fake), text="মেডিটেশন কোর্স কবে?", profile=None, conversation=None,
                            channel="messenger", persist=False)
-    assert r.path == "program" and r.text.startswith(f'"{BATCH}" অনুষ্ঠিত হবে')
-    assert "Always write a program's name" in fake.calls[0][1].system
+    assert r.path == "llm" and r.text.startswith(f'"{BATCH}" অনুষ্ঠিত হবে')
+    assert "Write a program's name exactly as given" in fake.calls[0][1].system
 
 
 def test_quoting_never_doubles_quotes():

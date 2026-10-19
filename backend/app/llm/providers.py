@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -108,15 +109,42 @@ class LLMProvider(ABC):
                          latency_ms=int((time.perf_counter() - t0) * 1000), tool_calls=calls)
 
 
+_CLAUDE_VERSION = re.compile(r"claude-(opus|sonnet|haiku)-(\d+)(?:-(\d{1,2}))?(?=-|$)")
+# Claude models after 4.6 reject temperature / top_p (400); depth is set with thinking + effort instead
+_LAST_SAMPLING_VERSION = (4, 6)
+# a model whose thinking cannot be switched off spends part of max_tokens on it: leave room for the reply
+_THINKING_FLOOR = 4000
+
+
+def _claude_request_style(model: str, max_tokens: int) -> tuple[dict, int] | None:
+    """None: an older model that takes temperature. Else the fields that replace it, and the max_tokens to send.
+    Chat replies and small JSON tasks need no long reasoning: thinking off where the model allows it, effort low."""
+    m = _CLAUDE_VERSION.search(model)
+    family, version = (m.group(1), (int(m.group(2)), int(m.group(3) or 0))) if m else ("", (0, 0))
+    if (m and version <= _LAST_SAMPLING_VERSION) or model.startswith("claude-3"):
+        return None
+    fields: dict = {"output_config": {"effort": "low"}}
+    if family == "sonnet" and version >= (5, 5):
+        fields["thinking"] = {"type": "between_tools"}        # Sonnet 5.5: "disabled" is a 400, this is thinking off
+    elif family in ("haiku", "sonnet") or (family == "opus" and version <= (5, 0)):
+        fields["thinking"] = {"type": "disabled"}             # accepted at effort high or below
+    else:                                                     # Opus 5.5, Fable, Mythos: thinking is always on
+        max_tokens = max(max_tokens, _THINKING_FLOOR)
+    return fields, max_tokens
+
+
 class AnthropicProvider(LLMProvider):
     name, default_base = "anthropic", "https://api.anthropic.com"
 
     def _build(self, req, model, max_tokens, temperature):
-        body = {"model": model, "max_tokens": max_tokens,
+        style = _claude_request_style(model, max_tokens)
+        body = {"model": model, "max_tokens": style[1] if style else max_tokens,
                 # static system prompt first + cache_control => prompt caching on the stable prefix
                 "system": [{"type": "text", "text": req.system, "cache_control": {"type": "ephemeral"}}],
                 "messages": _anthropic_messages(req.messages)}
-        if temperature is not None:
+        if style:
+            body.update(style[0])
+        elif temperature is not None:
             body["temperature"] = temperature
         return (f"{self.base_url}/v1/messages",
                 {"x-api-key": self.api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}, body)

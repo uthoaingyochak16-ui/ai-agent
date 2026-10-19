@@ -48,11 +48,15 @@ Warranty. All electronic items carry a one year warranty against manufacturing d
 Payment. We accept cash on delivery, bKash, Nagad and card payments. For bKash payments send the amount to our merchant number and share the transaction ID.
 """
 
-ROUTES = {  # task -> (provider, model, max_tokens)
-    "answer": ("anthropic", "claude-haiku-4-5-20251001", 350),
-    "answer_large": ("anthropic", "claude-sonnet-5-5", 600),
-    "extraction": ("anthropic", "claude-haiku-4-5-20251001", 250),
-    "summarization": ("anthropic", "claude-haiku-4-5-20251001", 150),
+ROUTES = {  # task -> (provider, model, max_tokens). Claude by default; OpenAI / Gemini can be picked per task in AI settings.
+    "answer": ("anthropic", "claude-sonnet-5-5", 600),
+    "answer_large": ("anthropic", "claude-sonnet-5-5", 800),
+    "router": ("anthropic", "claude-haiku-5-5", 400),
+    "rewrite": ("anthropic", "claude-haiku-5-5", 200),
+    "keywords": ("anthropic", "claude-haiku-5-5", 300),
+    "keygen": ("anthropic", "claude-haiku-5-5", 300),
+    "extraction": ("anthropic", "claude-haiku-5-5", 400),
+    "summarization": ("anthropic", "claude-haiku-5-5", 300),
 }
 
 

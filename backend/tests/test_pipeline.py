@@ -102,6 +102,14 @@ async def test_the_routers_reading_of_the_request_reaches_the_answering_model(en
     assert res.debug["guest_request"] == "How long delivery takes and what it costs"
 
 
+async def test_the_routers_language_decides_the_reply_language(env):
+    for lang, expected in (("banglish", "REPLY IN: Bangla"), ("en", "REPLY IN: English")):
+        env.fake.calls.clear()
+        await run_pipeline(env.session, env.llm, text="shipping?", profile=None, conversation=None, channel="messenger",
+                           persist=False, guest_language=lang)
+        assert expected in json.dumps([m for _, req in env.fake.calls for m in req.messages], ensure_ascii=False)
+
+
 def test_fill_known_drops_only_the_sentences_that_need_a_missing_value():
     from app.rag.templates import fill_known
     assert fill_known("রক্ত লাগলে জানান। বিস্তারিত: {blood_info}", {}) == "রক্ত লাগলে জানান।"

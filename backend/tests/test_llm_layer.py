@@ -32,6 +32,23 @@ async def test_anthropic_request_shape_prompt_caching_and_usage():
     assert body["system"][0]["cache_control"] == {"type": "ephemeral"} and body["max_tokens"] == 123
     assert body["messages"][-1]["role"] == "user" and PHONE not in json.dumps(body)
     assert (res.text, res.tokens_in, res.tokens_out) == ("Hello", 150, 7)
+    assert body["temperature"] == 0.1 and "thinking" not in body                 # an older model still takes temperature
+
+
+@pytest.mark.parametrize("model, thinking, max_tokens", [
+    ("claude-sonnet-5-5", {"type": "between_tools"}, 123),   # Sonnet 5.5: thinking off without "disabled"
+    ("claude-haiku-5-5", {"type": "disabled"}, 123),
+    ("claude-opus-4-8", {"type": "disabled"}, 123),
+    ("claude-opus-5-5", None, 4000),                          # thinking always on: room for it and the reply
+])
+@respx.mock
+async def test_newer_claude_models_get_effort_instead_of_temperature(model, thinking, max_tokens):
+    route = respx.post("https://api.anthropic.com/v1/messages").mock(return_value=httpx.Response(200, json={
+        "content": [{"type": "thinking", "thinking": ""}, {"type": "text", "text": "ok"}], "usage": {}}))
+    res = await AnthropicProvider("k").generate(guarded(), model=model, max_tokens=123, temperature=0.2)
+    body = json.loads(route.calls[0].request.content)
+    assert "temperature" not in body and body["output_config"] == {"effort": "low"}
+    assert body.get("thinking") == thinking and body["max_tokens"] == max_tokens and res.text == "ok"
 
 
 @respx.mock

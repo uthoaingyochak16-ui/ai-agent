@@ -42,12 +42,12 @@ def compact_sources(res) -> dict:
 
 async def generate_reply(session: AsyncSession, resolved, text: str, llm=None, *, knowledge_only: bool = False,
                          combined_turns: int = 1, standalone_question: str | None = None,
-                         guest_request: str | None = None) -> ReplyResult:
+                         guest_request: str | None = None, guest_language: str | None = None) -> ReplyResult:
     res = await run_pipeline(session, llm or get_llm_service(session), text=text, profile=resolved.profile,
                              conversation=resolved.conversation, channel=resolved.identity.channel,
                              is_test=resolved.identity.external_id.startswith("test:"), knowledge_only=knowledge_only,
                              combined_turns=combined_turns, standalone_question=standalone_question,
-                             guest_request=guest_request)
+                             guest_request=guest_request, guest_language=guest_language)
     reply = res.text
     # ask for consent exactly once, from the 2nd user message on, after their question has been answered
     p = resolved.profile

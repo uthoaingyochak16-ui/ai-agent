@@ -67,7 +67,8 @@ CONTEXT contains what the person asked for - the same office, place, program, se
 similar one. If it does, answer from it (combine pieces when needed). If it holds only part of it, give that part and
 say which part you do not have. If nothing in CONTEXT answers the question, your whole reply must be exactly NO_ANSWER:
 no apology, no explanation, no offer of a team member - the system sends the standard reply and logs the question for
-the team."""
+the team. A question about the person themself ("what is my name?", "what do you know about me?") is answered from
+PROFILE (or by saying you do not have that detail), never with NO_ANSWER."""
 ANSWER_CHECK_NOTE = ("ANSWER CHECK: if CONTEXT does not contain the answer to this QUESTION (the same office, place, "
                      "program, service or topic), reply with exactly NO_ANSWER and nothing else.")
 # A reply that names the internal CONTEXT block ("CONTEXT-এ এ বিষয়ে তথ্য নেই") is the model explaining that the
@@ -104,7 +105,6 @@ _PAYMENT_ACTION = re.compile(
     r"\b(?:taka|money)\s+(?:dibo|dite|pathabo|pathaisi|send|sent|ferot|kete)\b|"
     r"পেমেন্ট|পরিশোধ|বিকাশ|নগদ|রকেট|ব্যাংক|লেনদেন|ট্রানজ্যাকশন|রিফান্ড|রসিদ|রিসিট|কিস্তি|টাকা\s*(?:পাঠ|দেব|দিতে|ফেরত|কেটে)"
 )
-_FEE_QUESTION = re.compile(r"(?i)\b(fee|fees|cost|price|charge|khoroch|dam|taka)\b|ফি|খরচ|দাম|মূল্য|কত টাকা")
 
 
 def is_org_specific(q: str) -> bool:
@@ -113,12 +113,8 @@ def is_org_specific(q: str) -> bool:
 
 
 def _is_payment_action(q: str) -> bool:
-    """Payment handling is never automated. A plain program-fee question is handled separately."""
+    """Payment handling is never automated; asking what something costs is an ordinary question."""
     return bool(_PAYMENT_ACTION.search(q or ""))
-
-
-def _is_fee_question(q: str) -> bool:
-    return bool(_FEE_QUESTION.search(q or "")) and not _is_payment_action(q)
 
 
 def _is_complex(q: str) -> bool:
@@ -134,14 +130,15 @@ asked, and mention how many days are left when useful. Guests spell program name
 If a detail says "not listed", say it is not announced yet; a fee may still be given elsewhere in CONTEXT (a VALUE or
 Q&A line). Do not list every program unless the guest asks for a list. Write a program's name exactly as given."""
 # how many upcoming programs every answer prompt carries (the matched ones first)
-PROGRAM_LINES = 12
+PROGRAM_LINES = 30
 
 
 async def run_pipeline(session: AsyncSession, llm: LLMService, *, text: str, profile: Profile | None,
                        conversation: Conversation | None, channel: str | None,
                        history: list[tuple[str, str]] | None = None, persist: bool = True, is_test: bool = False,
                        embedder=None, knowledge_only: bool = False, combined_turns: int = 1,
-                       standalone_question: str | None = None, guest_request: str | None = None) -> PipelineResult:
+                       standalone_question: str | None = None, guest_request: str | None = None,
+                       guest_language: str | None = None) -> PipelineResult:
     """combined_turns: how many trailing stored user messages make up `text` (a debounced burst); they are the
     question, so they are left out of the history. standalone_question: the intent router already rewrote a
     follow-up into a self-contained question, so the separate "rewrite" call is skipped. guest_request: the router's
@@ -176,7 +173,8 @@ async def run_pipeline(session: AsyncSession, llm: LLMService, *, text: str, pro
     followup_of = reply_to_our_question(text, history)
     if followup_of:
         dbg["steps"].append(f"reply to the assistant's question ({followup_of[:80]}): continuing from there")
-    reply_lang = detect_in_conversation(text, history)
+    # the router read the whole message in context ("Dhakai?", "fee?" are Banglish): its language wins; Banglish -> Bangla
+    reply_lang = {"en": "en", "bn": "bn", "banglish": "bn"}.get(guest_language or "") or detect_in_conversation(text, history)
     rewrite_history = history[-max(1, min(4, hist_len or 4)):]
     retrieval_text = text
     rewrite_used = False
@@ -207,9 +205,8 @@ async def run_pipeline(session: AsyncSession, llm: LLMService, *, text: str, pro
     dbg["question_rewrite"] = {"original": text, "rewritten": retrieval_text, "used": rewrite_used}
 
     # Payment instructions, transfers, refunds, receipts and instalments are deliberately out of scope.  This is
-    # before Q&A/cache/LLM so an old saved response can never disclose a payment route.  The sole exception is a
-    # plain fee question, which may be answered from the verified Program table below.
-    fee_question = _is_fee_question(retrieval_text)
+    # before Q&A/cache/LLM so an old saved response can never disclose a payment route. A fee question ("how much?")
+    # is an ordinary question: saved Q&A, Variables, the schedule and the knowledge answer it.
     if _is_payment_action(retrieval_text):
         dbg["steps"].append("payment action blocked by policy")
         if persist and not is_test:
@@ -240,14 +237,9 @@ async def run_pipeline(session: AsyncSession, llm: LLMService, *, text: str, pro
         dbg["steps"].append(f"Q&A {q.id}: variables without a value {missing}; the rest of its answer goes to the AI")
         return None
 
-    # a fee question tries the Programs table first (always current); its Q&A matches wait until that finds nothing
-    fee_qas: list[tuple[QAPair, float, bool]] = []
     qa, sim = await match_qa_text(session, retrieval_text)
-    if qa is not None:
-        if fee_question:
-            fee_qas.append((qa, sim, sim == 1.0))
-        elif res := qa_reply(qa, sim, sim == 1.0):
-            return done(res)
+    if qa is not None and (res := qa_reply(qa, sim, sim == 1.0)):
+        return done(res)
 
     # ---- embed the (redacted) question once; reused by every later step -----------------------------------
     # The embedding provider can fail (quota, outage). Guests must still be answered: without a vector, the meaning
@@ -267,11 +259,8 @@ async def run_pipeline(session: AsyncSession, llm: LLMService, *, text: str, pro
             QAPair.active.is_(True), QAPair.embedding_version == embedding_version)
         .order_by("d").limit(3))).all() if qvec is not None else []
     dbg["qa_candidates"] = [{"id": q.id, "question": q.question, "similarity": round(1 - d, 4)} for q, d in rows]
-    if rows and 1 - rows[0].d >= qa_thr:
-        if fee_question:
-            fee_qas.append((rows[0][0], round(1 - rows[0].d, 4), False))
-        elif res := qa_reply(rows[0][0], round(1 - rows[0].d, 4), False):
-            return done(res)
+    if rows and 1 - rows[0].d >= qa_thr and (res := qa_reply(rows[0][0], round(1 - rows[0].d, 4), False)):
+        return done(res)
 
     # ---- 1c'. upcoming programs: every answer sees the schedule, so the AI (not a word match) decides which program a
     # question or a follow-up ("kothay hobe?") is about. A program the wording names leads the list.
@@ -287,21 +276,9 @@ async def run_pipeline(session: AsyncSession, llm: LLMService, *, text: str, pro
     # saved values (course fee, phones, links ...) are short and exact: always part of what the AI may quote
     value_ctx = ["VALUE — " + variable_answer(v) for v in var_rows if (v.value or "").strip()]
 
-    if fee_question:
-        # a fee is never answered by a saved sentence or a word match: which program's fee is meant (the course, a
-        # yoga orientation, "oitar fee?") is the AI's call, with the schedule, the values and these Q&A in front of it.
-        # Paying, refunds and receipts never get here: they were handed to a person above.
-        dbg["steps"].append("fee question: answered by the AI from the schedule, values, Q&A and knowledge")
-        for q, _, _ in fee_qas:
-            filled, missing = fill_template(q.answer_template, variables)
-            if not missing:
-                qa_hints.append(f"Q&A — {q.question}\n{filled}")
-            else:
-                qa_hint(q)
-
     # ---- 1c. the question asks for a value staff keep in Variables (fee, phone, date...) -> that value -------------
     # (before the cache and the documents: a document's copy of a price may be older than the variable)
-    vm = None if fee_question else match_variable(retrieval_text, var_rows)
+    vm = match_variable(retrieval_text, var_rows)
     if vm is not None:
         dbg["variable_match"] = {"key": vm[0].key, "score": round(vm[1], 3)}
         return done(PipelineResult(variable_answer(vm[0]), "variable", debug=dbg))

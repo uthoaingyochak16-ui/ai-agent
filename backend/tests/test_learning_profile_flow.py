@@ -187,9 +187,10 @@ async def test_f_organisation_question_without_knowledge_is_not_guessed(session,
     await session.commit()
     fake = FakeLLM({"small": "Our Sylhet office is at 12 Fake Road."})
     llm = LLMService(maker, fake)
-    for q in ("Quantum er Sylhet office er address ki?", "আপনাদের রংপুর শাখার নম্বর কত?", "What is your refund policy?"):
+    for q, path in (("Quantum er Sylhet office er address ki?", "no_context"), ("আপনাদের রংপুর শাখার নম্বর কত?", "no_context"),
+                    ("What is your refund policy?", "payment_disabled")):        # refunds always go to a person
         res = await run_pipeline(session, llm, text=q, profile=None, conversation=None, channel="messenger", embedder=EMB)
-        assert res.path == "no_context" and res.text in (DEFAULTS["no_answer_reply"], DEFAULTS["no_answer_reply_en"])
+        assert res.path == path and res.text in (DEFAULTS["no_answer_reply"], DEFAULTS["no_answer_reply_en"])
     assert fake.models() == []                                                   # the model was never asked
     assert (await session.execute(select(func.count()).select_from(UnansweredQuestion))).scalar_one() == 3
 
