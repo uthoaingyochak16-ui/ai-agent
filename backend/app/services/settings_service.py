@@ -28,7 +28,7 @@ DEFAULTS: dict[str, object] = {
     "consent_no_ack_en": "Okay, your details will not be saved. Let me know if you need anything else.",
     # --- tools (the assistant can act). create_lead / request_callback ask the guest to confirm first;
     # current_datetime only reads the clock (Bangladesh time), so it runs inline and is on by default.
-    "tools_enabled": {"create_lead": False, "request_callback": False, "current_datetime": True},
+    "tools_enabled": {"create_lead": False, "request_callback": False, "current_datetime": True, "search_knowledge": True},
     "tool_confirm_prompt": "আমি এটি করতে চাই: {action}। ঠিক আছে? \"হ্যাঁ\" বা \"না\" লিখুন।",
     "tool_confirm_prompt_en": "I'd like to do this for you: {action}. Is that okay? Reply YES or NO.",
     "tool_declined_ack": "ঠিক আছে, কিছু করা হয়নি। আর কিছু জানতে চাইলে বলুন।",

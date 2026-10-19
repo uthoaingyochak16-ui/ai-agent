@@ -74,7 +74,7 @@ LEAD = ToolCall("c1", "create_lead", {"interest": "meditation course", "phone": 
 async def test_tool_asks_first_and_runs_only_after_yes(session, env):
     fake, llm = env([("", [LEAD])])
     r = await send(session, llm, "ami meditation course e registration korte chai, number 01712345678", "a1")
-    assert [t.name for t in fake.calls[0][1]] == ["create_lead", "request_callback", "current_datetime"]  # offered
+    assert [t.name for t in fake.calls[0][1]] == ["search_knowledge", "create_lead", "request_callback", "current_datetime"]  # offered
     assert (await bot(session))[-1].startswith("আমি এটি করতে চাই: meditation course")         # asked, not done
     conv = await session.get(Conversation, r.conversation.id)
     assert conv.pending_tool["arguments"]["phone"] == "01712345678"                           # placeholder restored
@@ -110,7 +110,8 @@ async def test_arguments_with_someone_elses_contact_are_rejected(session, env):
 
 
 async def test_disabled_tools_are_not_offered(session, env):
-    await set_setting(session, "tools_enabled", {"create_lead": False, "request_callback": False, "current_datetime": False})
+    await set_setting(session, "tools_enabled", {"create_lead": False, "request_callback": False, "current_datetime": False,
+                                                  "search_knowledge": False})
     await session.commit()
     fake, llm = env([("plain answer", [])])
     await send(session, llm, "meditation course registration?", "d1")
@@ -127,7 +128,7 @@ async def test_current_datetime_runs_inline_and_is_on_by_default(session, env, m
     monkeypatch.setattr(tools_svc, "datetime", FrozenClock)
     fake, llm = env([("", [ToolCall("t", "current_datetime", {})]), ("Ekhon 3:05 PM", [])])
     await send(session, llm, "meditation course kobe? ekhon koyta baje?", "t1")
-    assert [t.name for t in fake.calls[0][1]] == ["create_lead", "current_datetime"]
+    assert [t.name for t in fake.calls[0][1]] == ["search_knowledge", "create_lead", "current_datetime"]
     assert await logs(session) == [("current_datetime", "executed")]                         # no confirmation asked
     fed = [m["content"] for m in fake.calls[1][0].messages if m["role"] == "tool"]
     assert fed and "Sunday, 18 October 2026, 03:05 PM (24h 15:05)" in fed[0]                          # 09:05 UTC = 15:05 Dhaka
@@ -191,3 +192,26 @@ async def test_plain_requests_are_unchanged_without_tools():
     req = PrivacyGuard().prepare_task("system", "hello")
     url, headers, body = AnthropicProvider("k")._build(req, "m", 100, 0.2)
     assert "tools" not in body and body["messages"] == req.messages
+
+
+# ---- search_knowledge: the model looks again with its own words --------------------------------------------------------
+async def test_the_model_can_search_the_knowledge_itself_before_answering(env, session):
+    await set_setting(session, "tools_enabled", {"search_knowledge": True})
+    await session.commit()
+    fake, llm = env([("", [ToolCall("s1", "search_knowledge", {"query": "meditation course registration"})]),
+                     ("Registration is open at every branch.", [])])
+    await send(session, llm, "where do I sign up?", "k1")
+    assert (await bot(session))[-1] == "Registration is open at every branch."
+    second_request = json.dumps(fake.calls[1][0].messages, ensure_ascii=False)
+    assert "Registration for the meditation course is open at every branch" in second_request   # the search result
+    assert ("search_knowledge", "executed") in await logs(session)
+    assert any(t.name == "search_knowledge" for t in fake.calls[0][1])
+
+
+async def test_no_answer_after_a_search_is_the_standard_reply_not_the_marker(env, session):
+    await set_setting(session, "tools_enabled", {"search_knowledge": True})
+    await session.commit()
+    fake, llm = env([("", [ToolCall("s1", "search_knowledge", {"query": "internship"})]), ("NO_ANSWER", [])])
+    await send(session, llm, "can I do an internship with you?", "k2")
+    reply = (await bot(session))[-1]
+    assert "NO_ANSWER" not in reply and reply in (DEFAULTS["no_answer_reply"], DEFAULTS["no_answer_reply_en"])

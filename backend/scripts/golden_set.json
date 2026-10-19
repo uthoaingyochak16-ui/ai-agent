@@ -60,7 +60,7 @@
     {"id": "office-bandarban-cox", "tags": ["office", "follow-up", "banglish"], "turns": [
       {"user": "Bandarban e apnader office er location daw.", "expect": "Gives the Bandarban office address from the knowledge (Bandarban cell, Triratna Complex 4th floor opposite the DC office, Bandarban Sadar) and/or Quantumom at Lama, Bandarban. Must not say it does not know."},
       {"user": "phone number?", "expect": "Phone numbers of that Bandarban office from the knowledge."},
-      {"user": "ar Cox's Bazar e?", "expect": "Cox's Bazar cell: Alamgir Mansion (4th floor), Advocate Firoz Ahmed Sarak, opposite Hotel Nid Mahal, Laldighi, Cox's Bazar-4700; mobile +88 01329 746726, +88 01306 257575."}
+      {"user": "ar Cox's Bazar e?", "expect": "The same kind of detail (location and/or phone, as the last turns asked) for the Cox's Bazar cell: Alamgir Mansion (4th floor), Advocate Firoz Ahmed Sarak, opposite Hotel Nid Mahal, Laldighi, Cox's Bazar-4700; mobile +88 01329 746726, +88 01306 257575. Must not say it does not know."}
     ]},
     {"id": "office-chattogram", "tags": ["office", "bangla"], "turns": [
       {"user": "চট্টগ্রামে আপনাদের সেন্টার কোথায়?", "expect": "Chattogram center: 'Badre Mahal', House 66 (ground floor), Road 6, O.R. Nizam Road R/A, Chattogram-4203; mobile +88 01329 746700, +88 01711 393010."}

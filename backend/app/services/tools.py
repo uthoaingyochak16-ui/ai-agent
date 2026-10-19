@@ -42,7 +42,10 @@ TOOLS_PROMPT = """
 Tools: call create_lead when the person clearly wants to join / enrol in a course or service, or asks to be contacted
 about one; call request_callback when they ask for a phone call or to talk to someone by phone. Details already on file
 are used automatically: never ask for them. Never call a tool for an ordinary question. When the answer depends on today's date, the day of
-the week or the current time (e.g. "koyta baje?", "ajke koto tarikh?", "what day is it?"), call current_datetime; never guess."""
+the week or the current time (e.g. "koyta baje?", "ajke koto tarikh?", "what day is it?"), call current_datetime; never guess.
+When CONTEXT does not hold what the person asked (a particular office, a program detail, a rule), call search_knowledge
+with a short Bangla query naming the subject before you reply NO_ANSWER; search at most twice. Answer only from what
+CONTEXT and the search results say."""
 
 
 def tools_prompt(profile: Profile | None, view=None) -> str:
@@ -109,8 +112,39 @@ async def _current_datetime(ctx: ToolContext, args: dict) -> str:
     return f"Current date and time in Bangladesh (Asia/Dhaka, UTC+6): {now:%A, %d %B %Y, %I:%M %p} (24h {now:%H:%M})"
 
 
+SEARCH_RESULTS = 5
+SEARCH_RESULT_CHARS = 4000
+
+
+async def _search_knowledge(ctx: ToolContext, args: dict) -> str:
+    """The model's own search: when the knowledge it was given does not answer, it looks again with its own words
+    (the office's name in Bangla, the program's official spelling ...). Read-only."""
+    from app.rag.embeddings import embed_texts          # local: the retrieval stack imports this module's neighbours
+    from app.rag.keyword_search import _record_text
+    from app.rag.search import hybrid_search
+    query = str(args.get("query", "")).strip()[:300]
+    try:
+        qvec = (await embed_texts(ctx.session, [query]))[0]
+    except Exception:  # noqa: BLE001 - the embedding provider can be down: word search still works
+        qvec = None
+    hits = await hybrid_search(ctx.session, query, qvec, top_k=SEARCH_RESULTS,
+                               min_similarity=float(await get_setting(ctx.session, "retrieval_min_similarity") or 0.25))
+    if not hits:
+        return "Nothing in the knowledge base matches this search."
+    texts = [(await _record_text(ctx.session, h.chunk)) if h.chunk.question else h.chunk.content for h in hits]
+    return ("Knowledge base results:\n" + "\n---\n".join(t for t in texts if t))[:SEARCH_RESULT_CHARS]
+
+
 _STR = {"type": "string"}
 TOOLS: dict[str, Tool] = {
+    "search_knowledge": Tool(  # read-only: runs inline, no confirmation
+        ToolSpec("search_knowledge", "Search the organisation's knowledge base (offices, programs, courses, services, "
+                                     "rules) when CONTEXT does not answer the question.",
+                 {"type": "object", "properties": {"query": {**_STR, "description": "a short search in Bangla script "
+                                                             "naming the subject, e.g. 'কক্সবাজার সেল ঠিকানা' or "
+                                                             "'সাদাকায়নে অংশ নিতে রেজিস্ট্রেশন'"}},
+                  "required": ["query"]}),
+        False, _search_knowledge, lambda a: "knowledge search"),
     "create_lead": Tool(
         ToolSpec("create_lead", "Save that this person wants to join a course / service, so staff follow up.",
                  {"type": "object", "properties": {"interest": {**_STR, "description": "the course or service they want"},
@@ -132,6 +166,10 @@ TOOLS: dict[str, Tool] = {
                  {"type": "object", "properties": {}}),
         False, _current_datetime, lambda a: "current date and time"),
 }
+
+
+# tools that only look something up: using them is not an action the guest must be told about
+READ_ONLY_TOOLS = frozenset({"search_knowledge", "current_datetime"})
 
 
 async def enabled_tools(session: AsyncSession) -> list[Tool]:

@@ -35,7 +35,7 @@ from app.services.answer_cache import same_topic
 from app.services.continuation import CONTINUE_NOTE, reply_to_our_question
 from app.services.learning import record_unknown
 from app.services.reply_style import pre_classify, tone_for
-from app.services.tools import TOOL_ROUNDS, ToolContext, enabled_tools, run_tool_round, tools_prompt
+from app.services.tools import READ_ONLY_TOOLS, TOOL_ROUNDS, ToolContext, enabled_tools, run_tool_round, tools_prompt
 from app.services.prompt_context import load_profile_view
 from app.services.language import localized
 from app.services.language import detect_in_conversation
@@ -438,7 +438,7 @@ async def run_pipeline(session: AsyncSession, llm: LLMService, *, text: str, pro
                                 consent_svc.get_email(profile) if profile and profile.email_enc else None) if v)
 
     # ---- 4b. tool calls: run / confirm, feed results back (max TOOL_ROUNDS rounds) -------------------------------------
-    tool_used, tool_texts = False, []
+    tool_used, acted, tool_texts = False, False, []
     if specs:
         tctx = ToolContext(session, profile, conversation, text)
         for _ in range(TOOL_ROUNDS):
@@ -453,17 +453,21 @@ async def run_pipeline(session: AsyncSession, llm: LLMService, *, text: str, pro
                 return done(PipelineResult(tr.reply, "tool_confirm", out.result.tokens_in, out.result.tokens_out, dbg))
             calls, results = [c for c, _ in tr.results], [r for _, r in tr.results]
             tool_texts = results
+            acted = acted or any(c.name not in READ_ONLY_TOOLS for c in calls)  # an action ran, not only a lookup
             try:
                 out = await llm.run(session, task, lambda policy, p=out.request, c=calls, r=results: PrivacyGuard.with_tool_results(p, c, r),
                                     channel=channel, conversation_id=conversation.id, is_test=is_test, tools=specs)
-            except LLMUnavailable as exc:  # the action already happened: tell the guest its outcome
+            except LLMUnavailable as exc:  # an action already happened: tell the guest its outcome
                 dbg["error"] = str(exc)
-                return done(PipelineResult("\n".join(tool_texts), "tool", debug=dbg))
+                if acted:
+                    return done(PipelineResult("\n".join(tool_texts), "tool", debug=dbg))
+                return done(PipelineResult(await localized(session, "no_answer_reply", text, reply_lang), "llm_unavailable", debug=dbg))
         if out.result.tool_calls:
             dbg["steps"].append(f"tool rounds exhausted ({TOOL_ROUNDS}); remaining calls ignored")
-    if tool_used and not out.result.text.strip():
-        return done(PipelineResult("\n".join(tool_texts) or await localized(session, "no_answer_reply", text, reply_lang), "tool", debug=dbg))
-    if not tool_used and NO_ANSWER.search(out.result.text):
+    if tool_used and not out.result.text.strip():  # raw search results are not a reply; an action's outcome is
+        return done(PipelineResult(("\n".join(tool_texts) if acted else "") or await localized(session, "no_answer_reply", text, reply_lang),
+                                   "tool", debug=dbg))
+    if not acted and NO_ANSWER.search(out.result.text):
         # the model read every candidate and none answers the question: the verified "don't know" reply
         dbg["steps"].append("AI: none of the retrieved knowledge answers this question")
         dbg.update({"provider": out.result.provider, "model": out.result.model, "task": task,
