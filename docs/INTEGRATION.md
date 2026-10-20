@@ -70,7 +70,8 @@ the assistant's **staging** copy (http://localhost:3001); the live assistant is 
 # main app (its folder)
 docker compose --env-file .env.assistant-test -f docker-compose.db.yml up -d
 docker compose --env-file .env.assistant-test -f docker-compose.yml up -d --build
-# assistant staging (this folder), with the MAIN_APP_* / SSO_* / FRAME_ANCESTORS values in a compose override
+# assistant staging (this folder): copy staging-mainapp.override.example.yml to staging-mainapp.override.yml
+# (git-ignored) and put in the Partner API key and the shared secret
 docker compose -f docker-compose.staging.yml -f staging-mainapp.override.yml up -d
 ```
 
