@@ -71,35 +71,45 @@ async def logs(session):
 LEAD = ToolCall("c1", "create_lead", {"interest": "meditation course", "phone": "[PHONE_1]"})
 
 
-async def test_tool_asks_first_and_runs_only_after_yes(session, env):
-    fake, llm = env([("", [LEAD])])
-    r = await send(session, llm, "ami meditation course e registration korte chai, number 01712345678", "a1")
-    assert [t.name for t in fake.calls[0][1]] == ["search_knowledge", "create_lead", "request_callback", "current_datetime"]  # offered
-    assert (await bot(session))[-1].startswith("আমি এটি করতে চাই: meditation course")         # asked, not done
-    conv = await session.get(Conversation, r.conversation.id)
-    assert conv.pending_tool["arguments"]["phone"] == "01712345678"                           # placeholder restored
-    assert await logs(session) == [("create_lead", "awaiting_confirmation")]
-    assert not (await session.execute(select(ProfileFact).where(ProfileFact.key == "courses_interested"))).first()
+CALLBACK = ToolCall("c2", "request_callback", {"reason": "meditation course", "phone": "[PHONE_1]"})
 
-    await send(session, llm, "হ্যাঁ", "a2")
-    assert (await bot(session))[-1] == DEFAULTS["tool_lead_ack"]
+
+async def test_an_interested_guest_goes_on_the_lead_list_at_once(session, env):
+    from app.models import Lead
+    fake, llm = env([("", [LEAD]), ("ধন্যবাদ! আমাদের টিম যোগাযোগ করবে।", [])])
+    await send(session, llm, "ami meditation course e registration korte chai, number 01712345678", "a1")
+    assert [t.name for t in fake.calls[0][1]] == ["search_knowledge", "create_lead", "request_callback", "current_datetime"]  # offered
+    assert (await bot(session))[-1] == "ধন্যবাদ! আমাদের টিম যোগাযোগ করবে।"               # no yes/no question first
     assert await logs(session) == [("create_lead", "executed")]
+    lead = (await session.execute(select(Lead))).scalar_one()
+    assert lead.interest == "meditation course" and lead.status == "off"                # no main app in this test
     facts = {f.key: f.value for f in (await session.execute(select(ProfileFact))).scalars()}
     assert facts["courses_interested"] == "meditation course"
     assert "pending_phone" in facts and "01712345678" not in facts["pending_phone"]          # no consent: held encrypted
     notes = [m.content_redacted for m in (await session.execute(select(Message).where(Message.role == "system"))).scalars()]
-    assert notes and notes[0].startswith("New lead: meditation course")
+    assert notes and notes[0].startswith(f"New lead #{lead.id}: meditation course")
+    told = json.dumps(fake.calls[1][0].messages, ensure_ascii=False)                     # what the model was told
+    assert "Saved on the lead list" in told
 
 
-async def test_no_or_an_unrelated_message_runs_nothing(session, env):
-    fake, llm = env([("", [LEAD]), ("", [LEAD]), ("course info", [])])
-    await send(session, llm, "ami meditation course e registration chai 01712345678", "b1")
+async def test_a_lead_without_a_phone_asks_for_one_once(session, env):
+    nophone = ToolCall("c3", "create_lead", {"interest": "yoga orientation"})
+    fake, llm = env([("", [nophone]), ("ফোন নম্বর দেবেন?", []), ("", [nophone]), ("ঠিক আছে", [])])
+    await send(session, llm, "yoga orientation e jete chai", "n1")
+    await send(session, llm, "yoga orientation e jete chai, ar ki lagbe?", "n2")
+    first, second = (json.dumps(fake.calls[i][0].messages, ensure_ascii=False) for i in (1, 3))
+    assert "ask ONCE" in first and "ask ONCE" not in second
+
+
+async def test_callback_asks_first_and_no_or_an_unrelated_message_runs_nothing(session, env):
+    fake, llm = env([("", [CALLBACK]), ("", [CALLBACK]), ("course info", [])])
+    await send(session, llm, "meditation course niye amake call korben? 01712345678", "b1")
+    assert "meditation course" in (await bot(session))[-1]                               # the confirmation question
     await send(session, llm, "না", "b2")
     assert (await bot(session))[-1] == DEFAULTS["tool_declined_ack"]
-    await send(session, llm, "meditation course registration chai 01712345678", "b3")
+    await send(session, llm, "meditation course niye call korben please 01712345678", "b3")
     await send(session, llm, "how long is the meditation course?", "b4")                     # not a yes/no: just a question
     assert [s for _, s in await logs(session)] == ["declined", "expired"]
-    assert not (await session.execute(select(ProfileFact).where(ProfileFact.key == "courses_interested"))).first()
 
 
 async def test_arguments_with_someone_elses_contact_are_rejected(session, env):

@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     upload_dir: str = "./uploads"
     cors_origins: str = "http://localhost:5173"
 
+    # The main application (docs/INTEGRATION.md): its Partner API gives the open programs with their registration
+    # forms and receives the leads. Empty URL or key = not connected (leads stay in the assistant's own list).
+    main_app_api_url: str = ""         # e.g. http://host.docker.internal:8000 (its backend)
+    main_app_api_key: str = ""         # a Partner API key with the scopes events:read and guests:write
+    main_app_public_url: str = ""      # the address guests open forms on, e.g. https://app.example.org
+
     # Single sign-on from the main application (docs/INTEGRATION.md). Empty secret = SSO off.
     sso_shared_secret: str = ""        # HS256 key the main app signs its short-lived login tokens with
     sso_issuer: str = ""               # expected "iss" claim (e.g. "main-app"); empty = not checked

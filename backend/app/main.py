@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api import (ai_admin, auth, cache_admin, channels_admin, conversations, documents, evaluation,
-                     health, keywords, profiles_admin, programs, qa, stats, teach, test_chat, webhooks)
+                     health, keywords, leads, profiles_admin, programs, qa, stats, teach, test_chat, webhooks)
 from app.core.config import get_settings
 from app.core.logging import request_id_var, setup_logging
 from app.db.session import get_sessionmaker
@@ -58,7 +58,7 @@ def create_app() -> FastAPI:
 
     for r in (health.router, webhooks.router, auth.router, conversations.router, profiles_admin.router,
               channels_admin.router, documents.router, qa.router, ai_admin.router, stats.router, test_chat.router,
-              evaluation.router, cache_admin.router, programs.router, keywords.router, teach.router):
+              evaluation.router, cache_admin.router, programs.router, keywords.router, teach.router, leads.router):
         app.include_router(r)
     return app
 

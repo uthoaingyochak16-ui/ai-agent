@@ -1,121 +1,77 @@
-# Connecting the assistant to the main application (Django)
+# The assistant and the main application (Quantum Foundation software)
 
-The assistant runs as its own service (its own database, its own Docker stack). The main application shows the
-assistant's dashboard inside one of its pages, and its users are signed in to the assistant with their main-app login
-(single sign-on). Guests (Messenger / Instagram / WhatsApp people) stay in the assistant's own database; nothing about
-them is shared with the main application.
+The assistant is the **Social Inbox** of the main application, run as its own service (own database, own Docker
+stack). It talks to guests on Messenger / Instagram / WhatsApp, answers from its knowledge, shares the registration
+form of a program a guest wants to join, and puts interested guests on a lead list that flows into the main app as
+guests + tasks.
 
 ```
- Browser ── main app (Django) page "Assistant"
-              └─ <iframe src="https://ASSISTANT/sso#token=…&next=/inbox">
-                    assistant dashboard  ──>  assistant API  ──>  assistant database
+ Guest (Messenger) ──> AI assistant ──────────────── Meta webhook, AI, knowledge, inbox, lead list
+                         │  ◄─ open programs + form links ── main app Partner API  GET  /api/partner/v1/programs
+                         │  ── interested guest (lead) ────> main app Partner API  POST /api/partner/v1/leads
+                         │                                     (guest + task, routed to a communicator)
+ Staff ──> main app "সোশ্যাল ইনবক্স" ──iframe + one-time sign-in──> assistant dashboard
 ```
 
-## 1. Shared secret (once)
+Guests' chats stay in the assistant; only a lead (name, phone, interest, a short note) goes to the main app.
 
-Generate one secret and put the same value in both applications.
+## Settings
+
+**Assistant `.env`**
+
+| Setting | Value |
+|---|---|
+| `MAIN_APP_API_URL` | the main app's backend (from the assistant's containers), e.g. `http://host.docker.internal:8000` |
+| `MAIN_APP_API_KEY` | a Partner API key from the main app with the scopes `events:read` and `guests:write` |
+| `MAIN_APP_PUBLIC_URL` | where guests open forms, e.g. `https://crm.quantummethod.org.bd` |
+| `SSO_SHARED_SECRET` | a random secret, the same as the main app's `ASSISTANT_SSO_SECRET` |
+| `SSO_ISSUER` | `main-app` (the same as the main app's `ASSISTANT_SSO_ISSUER`) |
+| `FRAME_ANCESTORS` | the main app's address, e.g. `https://crm.quantummethod.org.bd` |
+
+**Main app `.env`** (see its `ASSISTANT.md`)
+
+| Setting | Value |
+|---|---|
+| `ASSISTANT_URL` | the assistant dashboard's address, e.g. `https://assistant.example.org` |
+| `ASSISTANT_SSO_SECRET` | the same secret as above |
+| `ASSISTANT_SSO_ISSUER` | `main-app` |
+
+The Partner API key is made in the main app: Settings -> External Database Access (super admin), scopes
+`events:read` + `guests:write`. A secret: `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+
+## What happens
+
+- **Programs.** Every 15 minutes the worker brings in the main app's published events that are not over (and
+  removes closed ones). Each becomes a program with its form link `MAIN_APP_PUBLIC_URL/register?q=<id>`, so every
+  answer can use it; Leads -> "Sync programs now" does it at once.
+- **Leads.** When a guest shows real interest in attending or in knowing more, the AI records a lead (tool
+  `create_lead`), shares the program's form link, and asks once for a phone number if none is known. With a phone the
+  lead goes to the main app at once (a guest + a task in New Leads, assigned by its lead routing); without one, or
+  while the main app cannot be reached, it waits and the worker tries again every 5 minutes. Leads page: the list,
+  its status, "Send now".
+- **Social Inbox.** The main app's page `/admin/social` asks its backend for a one-time sign-in link
+  (`GET /api/social/assistant-link`, 2 minutes, single use) and shows the assistant dashboard in an iframe. Social
+  Inbox managers (`social.manage`) are admins in the assistant, everyone else with `social.view` an agent.
+
+## Security
+
+- Sign-in tokens: HS256 with the shared secret, issuer checked, at most 5 minutes old, each usable once; the token
+  is in the `#fragment` (never in a server log) and removed from the address bar at once.
+- The dashboard can be framed only by `FRAME_ANCESTORS`; the main app allows only `ASSISTANT_URL` in its frame-src.
+- The Partner API key is stored only in the assistant's `.env`; the main app keeps only its hash.
+- Both sites must be on HTTPS in production (a secure page cannot frame an insecure one).
+
+## Testing the two together on one computer
+
+The main app runs from its folder with `.env.assistant-test` (development mode, http://localhost:8080) and talks to
+the assistant's **staging** copy (http://localhost:3001); the live assistant is not touched.
 
 ```bash
-python -c "import secrets; print(secrets.token_urlsafe(48))"
+# main app (its folder)
+docker compose --env-file .env.assistant-test -f docker-compose.db.yml up -d
+docker compose --env-file .env.assistant-test -f docker-compose.yml up -d --build
+# assistant staging (this folder), with the MAIN_APP_* / SSO_* / FRAME_ANCESTORS values in a compose override
+docker compose -f docker-compose.staging.yml -f staging-mainapp.override.yml up -d
 ```
 
-**Assistant** `.env`:
-
-```
-SSO_SHARED_SECRET=<the secret>
-SSO_ISSUER=main-app
-FRAME_ANCESTORS=https://app.example.org        # the main app's origin(s), space-separated
-```
-
-Then restart the assistant: `docker compose up -d backend frontend`.
-
-**Main app** `settings.py`:
-
-```python
-ASSISTANT_URL = "https://assistant.example.org"     # the assistant's public address
-ASSISTANT_SSO_SECRET = env("ASSISTANT_SSO_SECRET")  # the same secret, never in source control
-```
-
-## 2. The sign-in link (Django)
-
-`pip install pyjwt`
-
-```python
-# assistant_link.py
-import time
-import uuid
-
-import jwt
-from django.conf import settings
-
-
-def assistant_url(user, next_path: str = "/") -> str:
-    """A one-time sign-in link to the assistant for this main-app user (valid for 2 minutes, usable once)."""
-    now = int(time.time())
-    token = jwt.encode({
-        "iss": "main-app",                          # must match SSO_ISSUER
-        "sub": str(user.pk),
-        "email": user.email,                        # the assistant identifies the user by email
-        "name": user.get_full_name() or user.email,
-        "role": "admin" if user.is_superuser else "agent",
-        "iat": now,
-        "exp": now + 120,
-        "jti": uuid.uuid4().hex,                    # one use only
-    }, settings.ASSISTANT_SSO_SECRET, algorithm="HS256")
-    return f"{settings.ASSISTANT_URL}/sso#token={token}&next={next_path}"
-```
-
-```python
-# views.py
-from django.contrib.auth.decorators import login_required
-from django.shortcuts import render
-
-from .assistant_link import assistant_url
-
-
-@login_required
-def assistant(request, page="inbox"):
-    return render(request, "assistant.html", {"assistant_src": assistant_url(request.user, f"/{page}")})
-```
-
-```html
-<!-- templates/assistant.html (inside your base layout) -->
-<iframe src="{{ assistant_src }}" style="width:100%; height:calc(100vh - 64px); border:0"
-        title="Assistant"></iframe>
-```
-
-Pages that `next` can open: `/` (overview), `/inbox`, `/profiles`, `/knowledge`, `/qa`, `/test-chat`, `/evaluation`, and
-for admins `/channels` and `/ai`.
-
-## 3. Roles
-
-| Token `role` | In the assistant |
-|---|---|
-| `admin` | everything, including Channels and AI settings |
-| `agent` (or none) | inbox, profiles, knowledge, Q&A, test chat |
-
-Name and role are updated from the main app at every sign-in, so the main app is in charge of them. To keep someone
-out, deactivate them in the main app (no new link) — or in the assistant, which then refuses their sign-in even with a
-valid token.
-
-## 4. Rules the assistant enforces
-
-- Token signed with HS256 and `SSO_SHARED_SECRET`; `iss` must equal `SSO_ISSUER`.
-- `exp`, `iat`, `jti` and `email` are required; a token older than 5 minutes (`SSO_MAX_AGE_S`) is refused.
-- Each token works once (`jti` is remembered).
-- The token travels in the `#fragment`, so it never reaches a server log, and the dashboard removes it from the
-  address bar at once.
-- The dashboard can only be framed by the origins in `FRAME_ANCESTORS` (plus itself).
-- The email/password form keeps working for admins created in the assistant (emergency access).
-
-## 5. Checklist
-
-1. Same secret in both `.env` / settings.
-2. `FRAME_ANCESTORS` = the main app's exact origin (`https://…`, no path, no trailing slash).
-3. Both sites on HTTPS (browsers block a secure page framing an insecure one).
-4. Open the main app's "Assistant" page: the dashboard appears signed in as that user.
-
-When this sign-in fails, the dashboard shows the reason (expired, already used, wrong secret or issuer, user
-deactivated). The assistant's API is documented by the backend itself at `/docs` (inside the stack:
-`docker compose exec backend python -c "import urllib.request as u; print(u.urlopen('http://localhost:8000/openapi.json').read().decode())"`;
-it is not exposed publicly).
+Then open http://localhost:8080, sign in, and open সোশ্যাল ইনবক্স.

@@ -39,9 +39,11 @@ NO_PHONE = "no phone on file: asked"
 CONFIRM_WINDOW = timedelta(minutes=15)
 
 TOOLS_PROMPT = """
-Tools: call create_lead when the person clearly wants to join / enrol in a course or service, or asks to be contacted
-about one; call request_callback when they ask for a phone call or to talk to someone by phone. Details already on file
-are used automatically: never ask for them. Never call a tool for an ordinary question. When the answer depends on today's date, the day of
+Tools: call create_lead when the person shows real interest in attending a program, course or event, wants to join
+or enrol, wants to know more about the organisation's work to take part, or asks to be contacted about one - not for a
+passing question. It puts them on the lead list for the team. When the program they want has a registration link in
+CONTEXT, also share that link in your reply. Call request_callback when they ask for a phone call or to talk to someone
+by phone. Details already on file are used automatically: never ask for them. Never call a tool for an ordinary question. When the answer depends on today's date, the day of
 the week or the current time (e.g. "koyta baje?", "ajke koto tarikh?", "what day is it?"), call current_datetime; never guess.
 When CONTEXT does not hold what the person asked (a particular office, a program detail, a rule), call search_knowledge
 with a short Bangla query naming the subject before you reply NO_ANSWER; search at most twice. Answer only from what
@@ -83,16 +85,31 @@ async def _staff_note(ctx: ToolContext, text: str) -> None:
 
 
 async def _create_lead(ctx: ToolContext, args: dict) -> str:
+    """The guest goes on the lead list (services/leads.py), and to the main application once a phone number is known.
+    The result tells the model what to say: the lead is saved; ask for a phone number once if none is on file."""
+    from app.services import leads  # local: leads -> main_app -> settings, no cycle at import time
     saved = []
     for key in ("name", "phone"):  # personal: saved now with consent, otherwise held encrypted until consent
         if args.get(key):
             saved.append(f"{key}: {await consent_svc.apply_field(ctx.session, ctx.profile, key, args[key])}")
     if args.get("interest"):
         await consent_svc.apply_field(ctx.session, ctx.profile, "courses_interested", args["interest"])
-    await _staff_note(ctx, f"New lead: {args.get('interest', '-')}"
+    lead = await leads.record(ctx.session, ctx.profile, ctx.conversation, interest=args.get("interest", ""),
+                              note=args.get("note", ""))
+    await _staff_note(ctx, f"New lead #{lead.id}: {lead.interest}"
                            + (f" · note: {args['note']}" if args.get("note") else "")
-                           + (f" · {', '.join(saved)}" if saved else "") + f" · profile {ctx.profile.id}")
-    return await localized(ctx.session, "tool_lead_ack", ctx.text)
+                           + (f" · {', '.join(saved)}" if saved else "")
+                           + (f" · sent to the main app (task {lead.main_app_task_id})" if lead.status == "sent"
+                              else f" · {lead.error}" if lead.error else ""))
+    ack = await localized(ctx.session, "tool_lead_ack", ctx.text)
+    if lead.status != "sent" and not await lead_svc.has_phone(ctx.session, ctx.profile):  # the team needs a number
+        asked = (await ctx.session.execute(select(func.count()).select_from(ToolCallLog).where(
+            ToolCallLog.conversation_id == ctx.conversation.id, ToolCallLog.tool == "create_lead"))).scalar_one()
+        if not asked:  # the first lead of this chat: ask once, saying why; later leads never ask again
+            optional = ctx.profile.personal_info_request_status in ("declined", "deferred")
+            return (f"Saved on the lead list. Tell the person, in their language: {ack} No phone number is on file: ask "
+                    "ONCE for one so a team member can contact them" + (" (say it is optional)." if optional else "."))
+    return f"Saved on the lead list. Tell the person, in their language: {ack}"
 
 
 async def _request_callback(ctx: ToolContext, args: dict) -> str:
@@ -146,13 +163,14 @@ TOOLS: dict[str, Tool] = {
                   "required": ["query"]}),
         False, _search_knowledge, lambda a: "knowledge search"),
     "create_lead": Tool(
-        ToolSpec("create_lead", "Save that this person wants to join a course / service, so staff follow up.",
+        ToolSpec("create_lead", "Put this person on the lead list: they are interested in attending a program / course "
+                                "or in knowing more, so the team follows up.",
                  {"type": "object", "properties": {"interest": {**_STR, "description": "the course or service they want"},
                                                    "name": {**_STR, "description": "their name, only if they gave it"},
                                                    "phone": {**_STR, "description": "their phone, only if they gave it"},
                                                    "note": {**_STR, "description": "anything else staff should know"}},
                   "required": ["interest"]}),
-        True, _create_lead, lambda a: f"{a.get('interest', '')}" + (f" ({a['name']})" if a.get("name") else ""), "preferred"),
+        False, _create_lead, lambda a: f"{a.get('interest', '')}" + (f" ({a['name']})" if a.get("name") else "")),
     "request_callback": Tool(
         ToolSpec("request_callback", "Ask a staff member to phone this person back.",
                  {"type": "object", "properties": {"reason": {**_STR, "description": "what the call is about"},

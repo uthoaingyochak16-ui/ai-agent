@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, FlaskConical, Inbox, LayoutDashboard, LogOut, Menu, MessagesSquare, Moon, Plug, SlidersHorizontal, Sun, Users, X } from "lucide-react";
+import { BarChart3, BookOpen, FlaskConical, Inbox, ListChecks, LayoutDashboard, LogOut, Menu, MessagesSquare, Moon, Plug, SlidersHorizontal, Sun, Users, X } from "lucide-react";
 import { Suspense, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../lib/auth";
@@ -9,6 +9,7 @@ const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/inbox", label: "Inbox", icon: Inbox },
   { to: "/profiles", label: "Profiles", icon: Users },
+  { to: "/leads", label: "Leads", icon: ListChecks },
   { to: "/knowledge", label: "Knowledge base", icon: BookOpen },
   { to: "/qa", label: "Q&A manager", icon: MessagesSquare },
   { to: "/test-chat", label: "Test chat", icon: FlaskConical },

@@ -1,0 +1,12 @@
+# Copy to staging-mainapp.override.yml (git-ignored) and fill in: connects staging to a main app running locally.
+services:
+  backend:
+    environment:
+      SSO_SHARED_SECRET: REPLACE_WITH_THE_SHARED_SECRET
+      SSO_ISSUER: main-app
+      MAIN_APP_API_URL: http://host.docker.internal:8000
+      MAIN_APP_API_KEY: qf_live_REPLACE_WITH_A_PARTNER_API_KEY
+      MAIN_APP_PUBLIC_URL: http://localhost:8080
+  frontend:
+    environment:
+      FRAME_ANCESTORS: http://localhost:8080

@@ -130,7 +130,9 @@ asked, and mention how many days are left when useful. Guests spell program name
 If a detail says "not listed", say it is not announced yet; a fee may still be given elsewhere in CONTEXT (a VALUE or
 Q&A line). The PROGRAM lines are the complete schedule: when none fits (no course in that city, no such event this
 month), that is the answer - say none is scheduled right now and point to the local center or the head office from
-CONTEXT if there is one; never reply NO_ANSWER for it. Do not list every program unless the guest asks for a list.
+CONTEXT if there is one; never reply NO_ANSWER for it. When the guest wants to attend or register for a program whose
+line has a registration link, give that link exactly as written (never make one up, never give another program's); a
+program without a link is joined through the office or helpline. Do not list every program unless the guest asks for a list.
 Write a program's name exactly as given."""
 # how many upcoming programs every answer prompt carries (the matched ones first)
 PROGRAM_LINES = 30

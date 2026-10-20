@@ -16,6 +16,7 @@ const Channels = lazy(() => import("./pages/Channels"));
 const AISettings = lazy(() => import("./pages/AISettings"));
 const Evaluation = lazy(() => import("./pages/Evaluation"));
 const TestChat = lazy(() => import("./pages/TestChat"));
+const Leads = lazy(() => import("./pages/Leads"));
 
 function Protected({ admin }: { admin?: boolean }) {
   const { user, loading } = useAuth();
@@ -36,6 +37,7 @@ export default function App() {
           <Route path="inbox" element={<InboxPage />} />
           <Route path="profiles" element={<Profiles />} />
           <Route path="profiles/:id" element={<ProfileDetail />} />
+          <Route path="leads" element={<Leads />} />
           <Route path="knowledge" element={<Knowledge />} />
           <Route path="qa" element={<QAManager />} />
           <Route path="evaluation" element={<Evaluation />} />

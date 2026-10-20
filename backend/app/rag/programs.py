@@ -91,8 +91,12 @@ def context_line(p: Program, today: date) -> str:
              + (f" to {p.end_date.isoformat()}" if p.end_date and p.end_date != p.start_date else "") + ")",
              f"starts in {(p.start_date - today).days} day(s)" if p.start_date > today else "already running",
              f"fee: {p.fee}" if p.fee else "fee: not listed", f"place: {p.place}" if p.place else "place: not listed"]
+    if p.date_text and p.date_text.strip():
+        parts.append(f"date as announced: {p.date_text.strip()[:80]}")
     if p.notes:
         parts.append(f"note: {p.notes[:200]}")
+    if p.registration_url:
+        parts.append(f"registration link: {p.registration_url}")
     return "PROGRAM " + " | ".join(parts)
 
 

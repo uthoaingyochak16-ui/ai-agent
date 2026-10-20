@@ -103,6 +103,24 @@ async def program_sync_job(ctx) -> dict:
         return result
 
 
+async def main_app_programs_job(ctx) -> dict:
+    """Every 15 min: the main application's open programs and their registration links (services/main_app.py)."""
+    from app.services import main_app
+    if not main_app.configured():
+        return {"status": "not configured"}
+    async with ctx["maker"]() as session:
+        return await main_app.sync_programs(session)
+
+
+async def leads_job(ctx) -> dict:
+    """Every 5 min: leads still waiting (no phone yet, main app unreachable) are tried again (services/leads.py)."""
+    from app.services import leads, main_app
+    if not main_app.configured():
+        return {"status": "not configured"}
+    async with ctx["maker"]() as session:
+        return {"sent": await leads.send_pending(session)}
+
+
 async def keygen_job(ctx, types: list[str], limit: int) -> dict:
     """AI keywords for records that have none (Keywords tab -> Generate with AI). Progress is kept in a setting."""
     from app.llm.service import LLMUnavailable
@@ -172,7 +190,9 @@ class WorkerSettings:
                  cron(programs_job, hour=18, minute=5),                                   # 00:05 Dhaka
                  cron(program_sync_job, hour=18, minute=15, timeout=60),                  # 00:15 Dhaka
                  cron(keyword_index_job, hour=21, minute=45),                             # 03:45 Dhaka
-                 cron(learning_job, hour=22, minute=0, timeout=900)]                      # 04:00 Dhaka
+                 cron(learning_job, hour=22, minute=0, timeout=900),                      # 04:00 Dhaka
+                 cron(main_app_programs_job, minute=set(range(2, 60, 15)), timeout=60, run_at_startup=True),
+                 cron(leads_job, minute=set(range(4, 60, 5)), timeout=120)]
     on_startup = startup
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     keep_result = 0

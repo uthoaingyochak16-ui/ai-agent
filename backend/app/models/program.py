@@ -12,7 +12,8 @@ class Program(Base):
     """An upcoming course / event. The assistant answers "kobe / koto / kothay" questions about programs from here;
     a program disappears the day after its last date (rag/programs.py purge_expired)."""
     __tablename__ = "programs"
-    __table_args__ = (Index("ix_programs_start_date", "start_date"),)
+    __table_args__ = (Index("ix_programs_start_date", "start_date"),
+                      Index("ix_programs_source_external", "source", "external_id", unique=True))
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(160))
@@ -22,6 +23,10 @@ class Program(Base):
     fee: Mapped[str | None] = mapped_column(Text)     # free text: "১১,৫০০ টাকা", "Free"
     place: Mapped[str | None] = mapped_column(String(200))
     notes: Mapped[str | None] = mapped_column(Text)
+    registration_url: Mapped[str | None] = mapped_column(String(500))   # the form a guest fills in to join
+    # where the row comes from: None = typed in / website schedule; "main_app" = the main application's events
+    source: Mapped[str | None] = mapped_column(String(32))
+    external_id: Mapped[str | None] = mapped_column(String(64))       # the program's id in that source
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
