@@ -23,7 +23,7 @@ SNAPSHOT_KEYS = ("qa_threshold", "qa_text_threshold", "cache_threshold", "retrie
                  "rerank_provider", "rerank_model", "rerank_candidates", "rerank_min_score")
 JUDGE_SYSTEM = """You evaluate customer-support answers. Return ONLY JSON with this exact shape:
 {"correct": true_or_false, "grounded": true_or_false, "reason": "short explanation"}
-Correct means the actual answer conveys the expected answer. Grounded means it is supported by the retrieved context or is a deterministic Q&A answer. Do not reward plausible unsupported claims."""
+Correct means the actual answer conveys the expected answer; when the expected answer is written as what the reply must do ("Gives the office address. Must not say it does not know."), correct means the reply does that. Grounded means it is supported by the retrieved context or is a deterministic Q&A answer. Do not reward plausible unsupported claims."""
 
 
 async def settings_snapshot(session: AsyncSession) -> dict:

@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, Send, ShieldCheck, ThumbsDown, User as UserIcon, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Badge, Button, Empty, ErrorNote, Field, Input, Meter, Modal, PageHeader, Panel, Select, Switch, Tabs, Textarea, useToast, cx } from "../components/ui";
+import { Badge, Button, Empty, ErrorNote, Field, Input, Meter, Modal, Panel, Select, Switch, Textarea, useToast, cx } from "../components/ui";
 import ReplyInspector from "../components/ReplyInspector";
-import TeachTab from "./TeachTab";
+import { FindReason } from "../components/Diagnosis";
 import { api } from "../lib/api";
 import { num, usd } from "../lib/format";
 
@@ -21,20 +21,8 @@ const PATH: Record<string, { label: string; tone: "ok" | "blue" | "warn" | "dang
 let seq = 1;
 const newSession = () => Math.random().toString(36).slice(2, 12);
 
-export default function TestChat() {
-  const [tab, setTab] = useState<"chat" | "teach">("chat");
-  return (
-    <>
-      <PageHeader title="Test chat" subtitle={tab === "chat" ? "Talk to the assistant exactly as a customer would. Nothing is sent to Meta. Select any reply to inspect how it was produced." : "Tell the assistant in your own words how it should behave. It turns that into rules; nothing changes until you save one."} />
-      <Tabs<"chat" | "teach"> value={tab} onChange={setTab} tabs={[{ id: "chat", label: "Customer chat" }, { id: "teach", label: "Teach the assistant" }]} />
-      {/* both stay mounted, so switching tabs keeps each conversation */}
-      <div hidden={tab !== "chat"}><CustomerChat /></div>
-      <div hidden={tab !== "teach"}><TeachTab /></div>
-    </>
-  );
-}
-
-function CustomerChat() {
+/** Test chat: talk to the assistant as a customer would (a tab of Train the assistant). */
+export default function CustomerChat() {
   const toast = useToast();
   const [channel, setChannel] = useState("messenger");
   const [profileId, setProfileId] = useState("");
@@ -43,7 +31,7 @@ function CustomerChat() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [sel, setSel] = useState<number | null>(null);
   const [text, setText] = useState("");
-  const [fix, setFix] = useState<{ q: string; a: string } | null>(null);
+  const [fix, setFix] = useState<{ q: string; a: string; debug?: any; history: { role: "user" | "assistant"; content: string }[] } | null>(null);
   // a reply marked wrong is never served again from the shared answer cache
   const markWrong = (answer: string) => api<{ blocked: number }>("/api/cache/feedback", { body: { answer } })
     .then((r) => { if (r.blocked) toast(`${r.blocked} cached copy of this answer blocked`); }).catch(() => {});
@@ -63,6 +51,7 @@ function CustomerChat() {
   });
   const submit = () => { const m = text.trim(); if (!m || send.isPending) return; setTurns((t) => [...t, { id: seq++, role: "user", content: m }]); setText(""); send.mutate(m); };
   const selected = useMemo(() => turns.find((t) => t.id === sel) ?? null, [turns, sel]);
+  const historyBefore = (id: number) => { const i = turns.findIndex((t) => t.id === id); let k = i - 1; while (k >= 0 && turns[k].role !== "user") k--; return turns.slice(0, Math.max(0, k)).map((t) => ({ role: t.role, content: t.content })); };
   const prevUser = (id: number) => { const i = turns.findIndex((t) => t.id === id); for (let k = i - 1; k >= 0; k--) if (turns[k].role === "user") return turns[k].content; return ""; };
 
   return (
@@ -88,7 +77,7 @@ function CustomerChat() {
                   <p className="mb-0.5 flex items-center gap-1 text-xs font-semibold text-muted"><Bot className="h-3 w-3" aria-hidden />Assistant{t.followup && <Badge className="ml-1">follow-up</Badge>}{!t.followup && t.debug?.path && <Badge tone={PATH[t.debug.path]?.tone ?? "neutral"} className="ml-1">{PATH[t.debug.path]?.label ?? t.debug.path}</Badge>}</p>
                   {t.content ? <p className="whitespace-pre-wrap break-words">{t.content}</p> : <p className="italic text-muted">{t.paused ? "No reply: the AI is paused for this conversation." : "No reply was generated."}</p>}
                   <div className="mt-2 flex flex-wrap gap-2"><Button size="sm" variant="ghost" aria-pressed={sel === t.id} onClick={() => setSel(t.id)}><ShieldCheck className="h-3.5 w-3.5" aria-hidden />Inspect</Button>
-                    {t.content && <Button size="sm" variant="ghost" onClick={() => { setFix({ q: prevUser(t.id), a: t.content }); markWrong(t.content); }}><ThumbsDown className="h-3.5 w-3.5" aria-hidden />Answer is wrong</Button>}</div>
+                    {t.content && <Button size="sm" variant="ghost" onClick={() => { setFix({ q: prevUser(t.id), a: t.content, debug: t.debug, history: historyBefore(t.id) }); markWrong(t.content); }}><ThumbsDown className="h-3.5 w-3.5" aria-hidden />Answer is wrong</Button>}</div>
                 </div>
               </div>
             ))}
@@ -103,12 +92,12 @@ function CustomerChat() {
         </section>
         <div className="xl:sticky xl:top-4 xl:self-start"><DebugPanel turn={selected} /></div>
       </div>
-      {fix && <FixModal q={fix.q} a={fix.a} onClose={() => setFix(null)} onSaved={(evalAdded) => { setFix(null); toast(evalAdded ? "Saved to Q&A and the evaluation set." : "Saved to the Q&A table. The next customer asking this gets your answer."); }} />}
+      {fix && <FixModal q={fix.q} a={fix.a} debug={fix.debug} history={fix.history} onClose={() => setFix(null)} onSaved={(evalAdded) => { setFix(null); toast(evalAdded ? "Saved to Q&A and the evaluation set." : "Saved to the Q&A table. The next customer asking this gets your answer."); }} />}
     </>
   );
 }
 
-function FixModal({ q, a, onClose, onSaved }: { q: string; a: string; onClose: () => void; onSaved: (evalAdded: boolean) => void }) {
+function FixModal({ q, a, debug, history, onClose, onSaved }: { q: string; a: string; debug?: any; history: { role: "user" | "assistant"; content: string }[]; onClose: () => void; onSaved: (evalAdded: boolean) => void }) {
   const qc = useQueryClient();
   const [question, setQ] = useState(q);
   const [answer, setA] = useState("");
@@ -124,6 +113,9 @@ function FixModal({ q, a, onClose, onSaved }: { q: string; a: string; onClose: (
     <Modal wide title="Save a corrected answer" onClose={onClose}>
       <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); save.mutate(false); }}>
         <div className="rounded-ctl bg-sunken px-3 py-2 text-sm"><p className="font-semibold">The assistant said</p><p className="whitespace-pre-wrap">{a}</p></div>
+        <details className="rounded-ctl border border-line p-3" open><summary className="cursor-pointer text-sm font-semibold">Why did it say this?</summary>
+          <div className="mt-2"><FindReason question={q} reply={a} debug={debug} history={history} compact /></div></details>
+        <p className="text-sm font-semibold">Or write the correct answer yourself</p>
         <Field label="Question">{(i) => <Input id={i} required value={question} onChange={(e) => setQ(e.target.value)} />}</Field>
         <Field label="Correct answer" hint="Use {variable} to insert values from the Variables panel.">{(i) => <Textarea id={i} required rows={5} value={answer} onChange={(e) => setA(e.target.value)} />}</Field>
         <Switch checked={clearAll} onChange={setClearAll} label="Also clear the whole answer cache (verified answers are kept)" />

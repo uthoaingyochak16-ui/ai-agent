@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FlaskConical, Pencil, Play, Plus, Trash2, Upload } from "lucide-react";
+import { FlaskConical, Pencil, Play, Plus, Sparkles, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { Badge, Button, Empty, ErrorNote, Field, IconButton, Input, Modal, PageHeader, Panel, Select, Spinner, Switch, TableWrap, Tabs, Td, Textarea, Th, useConfirm, useToast } from "../components/ui";
+import { Badge, Button, Empty, ErrorNote, Field, IconButton, Input, Modal, Panel, Select, Spinner, Switch, TableWrap, Tabs, Td, Textarea, Th, useConfirm, useToast } from "../components/ui";
 import { api } from "../lib/api";
 import { usd } from "../lib/format";
 
@@ -10,6 +10,7 @@ type EvalCase = { id?: number; question: string; expected_answer: string; expect
 const fresh = (question = ""): EvalCase => ({ question, expected_answer: "", expected_path: null, language: /[\u0980-\u09ff]/.test(question) ? "bn" : "banglish", tags: [], history: [], active: true });
 const pct = (n = 0) => `${(n * 100).toFixed(1)}%`;
 
+/** The test set (was the Evaluation page), the third tab of Train the assistant. */
 export default function Evaluation() {
   const qc = useQueryClient();
   const toast = useToast();
@@ -30,22 +31,31 @@ export default function Evaluation() {
   const importCsv = useMutation({ mutationFn: (file: File) => { const form = new FormData(); form.append("file", file); return api<any>("/api/eval/import", { form }); },
     onSuccess: (r) => { toast(`Imported ${r.created} evaluation case(s)`); qc.invalidateQueries({ queryKey: ["eval-cases"] }); if (upload.current) upload.current.value = ""; },
     onError: (e) => toast(e instanceof Error ? e.message : "Import failed", "danger") });
+  const starter = useMutation({ mutationFn: () => api<{ added: number; available: number }>("/api/eval/cases/starter", { method: "POST" }),
+    onSuccess: (r) => { toast(r.added ? `${r.added} ready-made test(s) added` : "The ready-made tests are already in your test set"); setTab("cases"); qc.invalidateQueries({ queryKey: ["eval-cases"] }); } });
   const d = detail.data;
   return <>
-    <PageHeader title="Evaluation" subtitle="Measure answer correctness, retrieval misses and unsupported answers against a repeatable test set."
-      actions={<><input ref={upload} type="file" accept=".csv" className="sr-only" onChange={(e) => e.target.files?.[0] && importCsv.mutate(e.target.files[0])} />
+    <ol className="mb-4 grid gap-2 text-sm sm:grid-cols-3">
+      {[["Add tests", "Each test is a guest question and what the answer must say. Start with the ready-made ones, add your own, or “Add to test set” after finding a reason. No document upload is needed."],
+        ["Run all tests", "The assistant answers every test question for real (nothing is sent to guests) and an AI judge marks each answer right or wrong."],
+        ["Read the result", "The score and each wrong answer, compared with the last run. Run again after every rule or knowledge change."]].map(([t, x], i) =>
+        <li key={t} className="rounded-panel border border-line bg-surface p-3"><p className="font-semibold">{i + 1}. {t}</p><p className="mt-1 text-muted">{x}</p></li>)}
+    </ol>
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><p className="max-w-2xl text-sm text-muted">{cases.data?.length ? `${cases.data.filter((c) => c.active).length} active test(s).` : "No tests yet."} A CSV import needs the columns question, expected_answer, language.</p>
+      <div className="flex flex-wrap gap-2"><input ref={upload} type="file" accept=".csv" className="sr-only" onChange={(e) => e.target.files?.[0] && importCsv.mutate(e.target.files[0])} />
         <Button size="sm" onClick={() => upload.current?.click()} loading={importCsv.isPending} title="CSV columns: question, expected_answer, language"><Upload className="h-4 w-4" />Import CSV</Button>
-        <Button size="sm" onClick={() => setEditing(fresh())}><Plus className="h-4 w-4" />Add case</Button>
-        <Button variant="primary" onClick={() => start.mutate()} loading={start.isPending} disabled={!cases.data?.some((c) => c.active)}><Play className="h-4 w-4" />Run evaluation</Button></>} />
-    <Tabs value={tab} onChange={setTab} tabs={[{ id: "results", label: `Runs${runs.data ? ` (${runs.data.length})` : ""}` }, { id: "cases", label: `Cases${cases.data ? ` (${cases.data.length})` : ""}` }]} />
+        <Button size="sm" onClick={() => starter.mutate()} loading={starter.isPending} title="About 30 checked questions about courses, programs, offices, fees, payments and handover"><Sparkles className="h-4 w-4" />Load ready-made tests</Button>
+        <Button size="sm" onClick={() => setEditing(fresh())}><Plus className="h-4 w-4" />Add a test</Button>
+        <Button variant="primary" onClick={() => start.mutate()} loading={start.isPending} disabled={!cases.data?.some((c) => c.active)}><Play className="h-4 w-4" />Run all tests</Button></div></div>
+    <Tabs value={tab} onChange={setTab} tabs={[{ id: "results", label: `Results${runs.data ? ` (${runs.data.length})` : ""}` }, { id: "cases", label: `Tests${cases.data ? ` (${cases.data.length})` : ""}` }]} />
     {tab === "cases" ? <>
-      {cases.isLoading ? <Spinner /> : !cases.data?.length ? <Empty title="No evaluation cases">Add cases manually or import a CSV with question, expected_answer and language columns.</Empty> :
+      {cases.isLoading ? <Spinner /> : !cases.data?.length ? <Empty title="No tests yet">Click “Load ready-made tests” to start, or add your own.</Empty> :
         <TableWrap><thead><tr><Th>Question</Th><Th>Expected answer</Th><Th>Language / tags</Th><Th>Status</Th><Th /></tr></thead><tbody>{cases.data.map((c) =>
           <tr key={c.id} className={c.active ? "" : "opacity-60"}><Td className="max-w-[300px] font-semibold">{c.question}</Td><Td className="max-w-[420px] whitespace-pre-wrap">{c.expected_answer}</Td>
             <Td><Badge tone="blue">{c.language}</Badge>{c.tags.map((tag) => <Badge key={tag} className="ml-1">{tag}</Badge>)}</Td><Td><Badge tone={c.active ? "ok" : "neutral"}>{c.active ? "Active" : "Off"}</Badge></Td>
             <Td><div className="flex"><IconButton label="Edit case" onClick={() => setEditing(c)}><Pencil className="h-4 w-4" /></IconButton><IconButton label="Delete case" onClick={async () => (await ask({ title: "Delete this evaluation case?", message: c.question, confirmLabel: "Delete", danger: true })) && del.mutate(c.id!)}><Trash2 className="h-4 w-4" /></IconButton></div></Td></tr>)}</tbody></TableWrap>}
     </> : <>
-      {!runs.data?.length ? (runs.isLoading ? <Spinner /> : <Empty title="No evaluation runs">Add active cases, then click “Run evaluation”.</Empty>) : <>
+      {!runs.data?.length ? (runs.isLoading ? <Spinner /> : <Empty title="No test runs yet">Add tests (here, or "Add to test set" after finding a reason), then click “Run all tests”.</Empty>) : <>
         <div className="mb-4 max-w-sm"><Select aria-label="Evaluation run" persistDraft={false} value={runId ?? ""} onChange={(e) => setRunId(+e.target.value)}>{runs.data.map((r) => <option key={r.id} value={r.id}>Run #{r.id} · {r.status} · {new Date(r.created_at).toLocaleString()}</option>)}</Select></div>
         {!d ? <Spinner /> : <RunDetails run={d} />}
       </>}

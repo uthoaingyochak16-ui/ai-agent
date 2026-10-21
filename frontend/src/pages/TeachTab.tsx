@@ -2,15 +2,17 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookCheck, Check, GraduationCap, Pencil, Plus, Send, Trash2, User as UserIcon, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Badge, Button, Empty, ErrorNote, IconButton, Switch, Textarea, cx, useConfirm, useToast } from "../components/ui";
+import { DiagnosisCard, type DiagnosisResult } from "../components/Diagnosis";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 
 type Rule = { id: string; text: string; enabled: boolean; created_at?: string; by?: string };
-type Msg = { id: number; role: "staff" | "assistant"; content: string; proposals?: string[]; replaces?: string[] };
+type Msg = { id: number; role: "staff" | "assistant"; content: string; proposals?: string[]; replaces?: string[]; diagnosis?: DiagnosisResult };
 let seq = 1;
 const EXAMPLES = [
   "Keu course korte agrohi bolle registration link dao, ar kon shohore thake jiggesh koro.",
   "Reply gulo aro choto koro, 2-3 line er beshi na.",
+  "\"Sylhet e office ache?\" eta jiggesh korle keno uttor dite parlo na?",
   "Amar chat e aro ki improvement lagbe?",
 ];
 
@@ -33,8 +35,8 @@ export default function TeachTab() {
     onSuccess: (r) => qc.setQueryData(["teach-rules"], r),
   });
   const chat = useMutation({
-    mutationFn: (history: Msg[]) => api<{ reply: string; instructions: string[]; replaces: string[] }>("/api/teach/chat", { body: { messages: history.map((m) => ({ role: m.role, content: m.content })) } }),
-    onSuccess: (r) => setMsgs((m) => [...m, { id: seq++, role: "assistant", content: r.reply, proposals: r.instructions, replaces: r.replaces }]),
+    mutationFn: (history: Msg[]) => api<{ reply: string; instructions: string[]; replaces: string[]; diagnosis?: DiagnosisResult }>("/api/teach/chat", { body: { messages: history.map((m) => ({ role: m.role, content: m.content })) } }),
+    onSuccess: (r) => setMsgs((m) => [...m, { id: seq++, role: "assistant", content: r.reply, proposals: r.diagnosis ? [] : r.instructions, replaces: r.replaces, diagnosis: r.diagnosis }]),
   });
 
   const sendText = (m: string) => {
@@ -57,7 +59,7 @@ export default function TeachTab() {
             <div className="rounded-panel border border-dashed border-line px-5 py-8 text-center">
               <GraduationCap className="mx-auto mb-2 h-6 w-6 text-accent-strong" aria-hidden />
               <p className="font-semibold">Explain how the assistant should behave</p>
-              <p className="mx-auto mt-1 max-w-md text-sm text-muted">Write the way you would brief a new front-desk volunteer, in Bangla, Banglish or English. You can also ask what it should improve.</p>
+              <p className="mx-auto mt-1 max-w-md text-sm text-muted">Write the way you would brief a new front-desk volunteer, in Bangla, Banglish or English. Ask why it failed on a guest question and it will run that question and find the reason, or ask what it should improve.</p>
               <div className="mt-4 flex flex-col items-center gap-2">
                 {EXAMPLES.map((e) => <button key={e} type="button" disabled={!admin} onClick={() => sendText(e)} className="max-w-md rounded-full border border-line px-3 py-1.5 text-sm hover:border-accent hover:bg-sunken disabled:opacity-50">{e}</button>)}
               </div>
@@ -69,7 +71,8 @@ export default function TeachTab() {
             <div key={m.id} className="flex justify-start">
               <div className="max-w-[90%] rounded-panel bg-sunken px-3 py-2">
                 <p className="mb-0.5 flex items-center gap-1 text-xs font-semibold text-muted"><GraduationCap className="h-3 w-3" aria-hidden />Teaching helper</p>
-                <p className="whitespace-pre-wrap break-words">{m.content}</p>
+                {m.diagnosis ? <div className="mt-1"><p className="mb-2 text-xs text-muted">I ran "{m.diagnosis.question}" as a guest would and checked how the reply was made:</p><DiagnosisCard d={m.diagnosis} /></div>
+                  : <p className="whitespace-pre-wrap break-words">{m.content}</p>}
                 {!!m.proposals?.length && (
                   <div className="mt-3 space-y-2">
                     <p className="text-xs font-semibold text-muted">Proposed rule{m.proposals.length > 1 ? "s" : ""}{m.replaces?.length ? " (replaces an existing rule)" : ""}</p>

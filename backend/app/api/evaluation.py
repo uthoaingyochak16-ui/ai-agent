@@ -4,6 +4,7 @@ import csv
 import io
 import json
 from decimal import Decimal
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
@@ -58,6 +59,33 @@ async def create_case(body: CaseIn, session: AsyncSession = Depends(get_session)
     await session.commit()
     await session.refresh(row)
     return _case(row)
+
+
+STARTER = Path(__file__).resolve().parents[2] / "scripts" / "golden_set.json"
+
+
+@router.post("/cases/starter")
+async def add_starter_cases(session: AsyncSession = Depends(get_session)):
+    """Ready-made tests (scripts/golden_set.json): the first guest message of each checked chat and what its reply must
+    do. Questions already in the test set are skipped, so pressing it twice adds nothing."""
+    try:
+        cases = json.loads(STARTER.read_text(encoding="utf-8")).get("cases", [])
+    except (OSError, ValueError):
+        raise HTTPException(404, "The ready-made test set is not available on this server") from None
+    have = set((await session.execute(select(EvalCase.question))).scalars())
+    added = 0
+    for c in cases:
+        turn = (c.get("turns") or [{}])[0]
+        q, expect = (turn.get("user") or "").strip(), (turn.get("expect") or "").strip()
+        if not q or not expect or q in have:
+            continue
+        lang = "bn" if any("ঀ" <= ch <= "৿" for ch in q) else "en" if "english" in (c.get("tags") or []) else "banglish"
+        session.add(EvalCase(question=q[:4000], expected_answer=expect[:12000], language=lang,
+                             tags=sorted({"ready-made", *[str(t)[:50] for t in c.get("tags") or []]}), history=[], active=True))
+        have.add(q)
+        added += 1
+    await session.commit()
+    return {"added": added, "available": len(cases)}
 
 
 @router.put("/cases/{case_id}")
