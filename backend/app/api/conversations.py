@@ -23,22 +23,47 @@ def _msg(m: Message) -> dict:
             "sources": m.sources_json, "tokens_in": m.tokens_in, "tokens_out": m.tokens_out}
 
 
+def _waiting():
+    """The latest message of the conversation is the guest's: nobody (AI or staff) has answered it yet."""
+    latest = select(Message.role).where(Message.conversation_id == Conversation.id, Message.role.in_(("user", "assistant", "agent")))         .order_by(Message.id.desc()).limit(1).correlate(Conversation).scalar_subquery()
+    return latest == "user"
+
+
+async def _account_labels(session: AsyncSession) -> dict[tuple[str, str], str]:
+    from app.models import ChannelConfig
+    rows = (await session.execute(select(ChannelConfig.channel, ChannelConfig.account_id, ChannelConfig.label))).all()
+    return {(ch, acc): label for ch, acc, label in rows if acc and label}
+
+
 @router.get("")
 async def list_conversations(channel: str | None = None, status: str | None = None, profile_id: int | None = None, include_test: bool = False,
+                             account_id: str | None = None, waiting: bool = False, q: str | None = Query(None, max_length=100),
                              limit: int = Query(50, le=200), offset: int = 0,
                              session: AsyncSession = Depends(get_session)):
-    q = (select(Conversation, ChannelIdentity, Profile).join(ChannelIdentity, Conversation.channel_identity_id == ChannelIdentity.id)
-         .outerjoin(Profile, Conversation.profile_id == Profile.id))
+    """The unified inbox: every platform and every connected Page / account / number. account_id: one of them only;
+    waiting: the guest wrote last; q: the guest's name or words of the chat."""
+    query = (select(Conversation, ChannelIdentity, Profile).join(ChannelIdentity, Conversation.channel_identity_id == ChannelIdentity.id)
+             .outerjoin(Profile, Conversation.profile_id == Profile.id))
     if not include_test:
-        q = q.where(~ChannelIdentity.external_id.like("test:%"))
+        query = query.where(~ChannelIdentity.external_id.like("test:%"))
     if channel:
-        q = q.where(ChannelIdentity.channel == channel)
+        query = query.where(ChannelIdentity.channel == channel)
+    if account_id:
+        query = query.where(ChannelIdentity.account_id == account_id)
     if status:
-        q = q.where(Conversation.status == status)
+        query = query.where(Conversation.status == status)
     if profile_id:
-        q = q.where(Conversation.profile_id == profile_id)
-    rows = (await session.execute(q.order_by(Conversation.last_message_at.desc().nullslast(), Conversation.id.desc())
+        query = query.where(Conversation.profile_id == profile_id)
+    if waiting:
+        query = query.where(_waiting())
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        query = query.where(Profile.name.ilike(like) | ChannelIdentity.display_name.ilike(like)
+                            | select(Message.id).where(Message.conversation_id == Conversation.id,
+                                                       Message.content_redacted.ilike(like)).correlate(Conversation).exists())
+    rows = (await session.execute(query.order_by(Conversation.last_message_at.desc().nullslast(), Conversation.id.desc())
                                   .limit(limit).offset(offset))).all()
+    labels = await _account_labels(session)
     out = []
     for c, i, p in rows:
         last = (await session.execute(select(Message).where(Message.conversation_id == c.id)
@@ -46,8 +71,41 @@ async def list_conversations(channel: str | None = None, status: str | None = No
         out.append({"id": c.id, "channel": i.channel, "status": c.status, "ai_paused": c.ai_paused,
                     "profile_id": c.profile_id, "name": (p.name if p and p.name else i.display_name), "avatar_url": i.avatar_url,
                     "last_message": last.content_redacted[:140] if last else None, "last_message_at": c.last_message_at,
+                    "last_role": last.role if last else None, "waiting": bool(last and last.role == "user"),
+                    "account_id": i.account_id, "account_label": labels.get((i.channel, i.account_id or "")),
                     "last_user_message_at": i.last_user_message_at})
     return out
+
+
+@router.get("/summary")
+async def inbox_summary(session: AsyncSession = Depends(get_session)):
+    """Counts for the inbox side bar: per platform, per connected Page / account / number, needing a person, waiting
+    for a reply, and Facebook comments waiting for staff."""
+    from app.models import ChannelConfig, PostComment
+    real = ~ChannelIdentity.external_id.like("test:%")
+    base = select(func.count()).select_from(Conversation).join(ChannelIdentity, Conversation.channel_identity_id == ChannelIdentity.id).where(real)
+    per = dict((await session.execute(select(ChannelIdentity.channel, func.count()).select_from(Conversation)
+                                      .join(ChannelIdentity, Conversation.channel_identity_id == ChannelIdentity.id).where(real)
+                                      .group_by(ChannelIdentity.channel))).all())
+    per_acc = {(ch, acc): n for ch, acc, n in (await session.execute(
+        select(ChannelIdentity.channel, ChannelIdentity.account_id, func.count()).select_from(Conversation)
+        .join(ChannelIdentity, Conversation.channel_identity_id == ChannelIdentity.id).where(real)
+        .group_by(ChannelIdentity.channel, ChannelIdentity.account_id))).all()}
+    cfgs = (await session.execute(select(ChannelConfig).order_by(ChannelConfig.channel, ChannelConfig.id))).scalars().all()
+    accounts = [{"channel": a.channel, "account_id": a.account_id, "label": a.label, "status": a.status, "enabled": a.enabled,
+                 "conversations": per_acc.get((a.channel, a.account_id), 0)} for a in cfgs if a.account_id]
+    # per platform: is anything connected, and does it work (the Inbox tells the staff what to fix)
+    platforms = {ch: {"accounts": sum(1 for a in accounts if a["channel"] == ch),
+                      "working": sum(1 for a in accounts if a["channel"] == ch and a["status"] == "ok"),
+                      "problem": next((a.status_detail for a in cfgs if a.channel == ch and a.status == "error" and a.status_detail), None)}
+                 for ch in ("messenger", "instagram", "whatsapp")}
+    return {"all": (await session.execute(base)).scalar_one(),
+            "handover": (await session.execute(base.where(Conversation.status == "handover"))).scalar_one(),
+            "waiting": (await session.execute(base.where(_waiting()))).scalar_one(),
+            "channels": {ch: per.get(ch, 0) for ch in ("messenger", "instagram", "whatsapp")},
+            "accounts": accounts, "platforms": platforms,
+            "comments_waiting": (await session.execute(select(func.count()).select_from(PostComment).where(
+                PostComment.status.in_(("draft", "needs_staff", "failed"))))).scalar_one()}
 
 
 @router.get("/{conv_id}")
@@ -58,9 +116,19 @@ async def get_conversation(conv_id: int, session: AsyncSession = Depends(get_ses
     i = await session.get(ChannelIdentity, c.channel_identity_id)
     p = await session.get(Profile, c.profile_id) if c.profile_id else None
     msgs = (await session.execute(select(Message).where(Message.conversation_id == c.id).order_by(Message.id))).scalars().all()
+    from app.models import PostComment
+    labels = await _account_labels(session)
+    # the same person's comments on the Page's posts (the comment's author id is the one Meta uses for this Page)
+    comments = (await session.execute(select(PostComment).where(PostComment.from_id == i.external_id)
+                                      .order_by(PostComment.id.desc()).limit(5))).scalars().all() if i.external_id else []
     return {"id": c.id, "channel": i.channel, "status": c.status, "ai_paused": c.ai_paused,
             "name": (p.name if p and p.name else i.display_name), "avatar_url": i.avatar_url,
             "handover_reason": c.handover_reason, "profile_id": c.profile_id,
+            "account_id": i.account_id, "account_label": labels.get((i.channel, i.account_id or "")),
+            "guest_id": i.external_id, "started_at": msgs[0].created_at if msgs else None,
+            "comments": [{"id": x.id, "message": x.message, "post_text": (x.post_text or "")[:160], "status": x.status,
+                          "comment_url": f"https://www.facebook.com/{x.comment_id}", "received_at": x.received_at,
+                          "channel": x.channel} for x in comments],
             "last_user_message_at": i.last_user_message_at, "messages": [_msg(m) for m in msgs]}
 
 

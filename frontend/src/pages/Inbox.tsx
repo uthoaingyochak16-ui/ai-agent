@@ -2,35 +2,73 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, ClipboardList, Clock, Pause, Play, Send, User, UserRound, ThumbsDown } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Avatar, Badge, Button, ChannelBadge, Empty, ErrorNote, Field, Input, PageHeader, Select, Spinner, Textarea, useToast, cx } from "../components/ui";
+import { Avatar, Badge, Button, ChannelBadge, Empty, ErrorNote, Field, Input, PageHeader, Spinner, Textarea, useToast, cx } from "../components/ui";
 import ReplyInspector from "../components/ReplyInspector";
 import { ApiError, api } from "../lib/api";
 import { ago, when } from "../lib/format";
 
+type Folder = { key: string; label: string; count?: number; params: Record<string, string | boolean>; sub?: boolean; note?: string; warn?: boolean };
+const PLATFORM: Record<string, string> = { messenger: "Facebook Messenger", instagram: "Instagram", whatsapp: "WhatsApp" };
+
+/** One inbox for every platform and every connected Facebook Page, Instagram account and WhatsApp number, in the
+ *  manner of Meta Business Suite: folders on the left, conversations in the middle, the chat on the right. */
 export default function InboxPage() {
   const [sp, setSp] = useSearchParams();
-  const [channel, setChannel] = useState("");
-  const [status, setStatus] = useState("");
+  const [folder, setFolder] = useState("all");
+  const [search, setSearch] = useState("");
+  const [q, setQ] = useState("");
+  useEffect(() => { const t = setTimeout(() => setQ(search.trim()), 350); return () => clearTimeout(t); }, [search]);
   const sel = sp.get("conv") ? Number(sp.get("conv")) : null;
-  const list = useQuery({ queryKey: ["convs", channel, status], queryFn: () => api<any[]>("/api/conversations", { params: { channel, status } }), refetchInterval: 5000 });
+  const sum = useQuery({ queryKey: ["inbox-summary"], queryFn: () => api<any>("/api/conversations/summary"), refetchInterval: 10000 });
+  const s = sum.data;
+  const folders: Folder[] = [
+    { key: "all", label: "All messages", count: s?.all, params: {} },
+    { key: "waiting", label: "Waiting for a reply", count: s?.waiting, params: { waiting: true } },
+    { key: "handover", label: "Needs a person", count: s?.handover, params: { status: "handover" } },
+    // every platform is listed, connected or not, so it is clear what is missing
+    ...Object.keys(PLATFORM).flatMap((ch) => {
+      const accs = (s?.accounts ?? []).filter((a: any) => a.channel === ch);
+      const pl = s?.platforms?.[ch];
+      const note = !pl?.accounts ? "not connected" : !pl.working ? "connection problem" : undefined;
+      return [{ key: ch, label: PLATFORM[ch], count: s?.channels?.[ch], params: { channel: ch }, note, warn: !!pl?.accounts && !pl.working },
+        ...accs.map((a: any) => ({ key: `${ch}:${a.account_id}`, label: a.label || `${ch === "whatsapp" ? "Number" : ch === "instagram" ? "Account" : "Page"} ${a.account_id}`, count: a.conversations,
+          params: { channel: ch, account_id: a.account_id }, sub: true, warn: a.status === "error", note: a.status === "error" ? "problem" : undefined }))];
+    }),
+  ];
+  const current = folders.find((f) => f.key === folder) ?? folders[0];
+  const list = useQuery({ queryKey: ["convs", current.params, q], queryFn: () => api<any[]>("/api/conversations", { params: { ...current.params, q } }), refetchInterval: 5000 });
   return (
     <>
-      <PageHeader title="Inbox" subtitle="Every conversation across channels. Updates every few seconds." />
-      <div className="grid gap-4 lg:grid-cols-[340px_1fr]" style={{ minHeight: "60vh" }}>
+      <PageHeader title="Inbox" subtitle="Messages from all your Facebook Pages, Instagram accounts and WhatsApp numbers in one place. The AI answers them; you can step in any time." />
+      <div className="grid gap-4 lg:grid-cols-[220px_320px_1fr]" style={{ minHeight: "60vh" }}>
+        <nav aria-label="Inbox folders" className={cx("rounded-panel border border-line bg-surface p-2", !!sel && "hidden lg:block")}>
+          <ul className="space-y-0.5">{folders.map((f) => (
+            <li key={f.key}><button type="button" onClick={() => setFolder(f.key)} aria-current={folder === f.key}
+                className={cx("flex w-full items-center justify-between gap-2 rounded-ctl px-2.5 py-1.5 text-left text-sm", f.sub && "pl-6 text-xs",
+                  folder === f.key ? "bg-accent-soft font-semibold text-accent-strong" : "text-ink hover:bg-sunken")}>
+              <span className="flex min-w-0 flex-col"><span className="flex min-w-0 items-center gap-1.5">{!f.sub && PLATFORM[f.key] && <ChannelBadge channel={f.key} />}<span className="truncate">{PLATFORM[f.key] ? "" : f.label}</span></span>
+                {f.note && <span className={cx("text-[11px]", f.warn ? "text-danger" : "text-muted")}>{f.note}</span>}</span>
+              {f.count != null && <span className={cx("shrink-0 tabular-nums text-xs", (f.key === "waiting" || f.key === "handover") && f.count ? "font-bold text-warn" : "text-muted")}>{f.count}</span>}
+            </button></li>
+          ))}</ul>
+          <Link to="/comments" className="mt-2 flex items-center justify-between rounded-ctl border-t border-line px-2.5 pt-2 text-sm text-ink hover:text-accent-strong">
+            <span>Facebook post comments</span>{!!s?.comments_waiting && <Badge tone="warn">{s.comments_waiting}</Badge>}</Link>
+          {s && Object.values(s.platforms ?? {}).some((p: any) => !p.accounts || !p.working) && <p className="mt-2 px-2.5 text-xs text-muted">Connect or fix a Page, Instagram account or WhatsApp number on <Link className="font-semibold underline" to="/channels">Pages and numbers</Link>; its messages then arrive here.</p>}
+        </nav>
         <section aria-label="Conversations" className={cx("rounded-panel border border-line bg-surface", !!sel && "hidden lg:block")}>
-          <div className="flex gap-2 border-b border-line p-3">
-            <Select aria-label="Channel" value={channel} onChange={(e) => setChannel(e.target.value)}><option value="">All channels</option><option value="messenger">Messenger</option><option value="instagram">Instagram</option><option value="whatsapp">WhatsApp</option></Select>
-            <Select aria-label="Status" value={status} onChange={(e) => setStatus(e.target.value)}><option value="">Any status</option><option value="open">AI active</option><option value="handover">Needs a person</option></Select>
+          <div className="border-b border-line p-3">
+            <Input persistDraft={false} type="search" aria-label="Search by name or words" placeholder="Search name or words" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
-          {list.isLoading ? <Spinner /> : !list.data?.length ? <div className="p-4"><Empty title="No conversations">Messages from your connected channels appear here.</Empty></div> : (
+          {list.isLoading ? <Spinner /> : !list.data?.length ? <div className="p-4"><Empty title={q ? "Nothing found" : "No conversations here"}>{q ? "Try other words." : "Messages from your connected channels appear here."}</Empty></div> : (
             <ul className="max-h-[70vh] divide-y divide-line overflow-y-auto">
               {list.data.map((c) => (
                 <li key={c.id}><button onClick={() => setSp({ conv: String(c.id) })} aria-current={sel === c.id} className={cx("flex w-full gap-3 px-3 py-3 text-left hover:bg-sunken", sel === c.id && "bg-accent-soft")}>
-                  <Avatar name={c.name} src={c.avatar_url} />
+                  <span className="relative"><Avatar name={c.name} src={c.avatar_url} />{c.waiting && <span className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full border-2 border-surface bg-warn" title="Waiting for a reply" />}</span>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2"><span className="flex min-w-0 items-center gap-1.5"><span className="truncate font-semibold">{c.name ?? `Customer ${c.id}`}</span><ChannelBadge channel={c.channel} /></span><span className="shrink-0 text-xs text-muted">{ago(c.last_message_at)}</span></div>
-                    <p className="truncate text-sm text-muted">{c.last_message ?? "No messages"}</p>
-                    <div className="mt-1 flex gap-1">{c.status === "handover" && <Badge tone="warn">Needs a person</Badge>}{c.ai_paused && c.status !== "handover" && <Badge>AI paused</Badge>}</div>
+                    <div className="flex items-center justify-between gap-2"><span className={cx("truncate", c.waiting ? "font-bold" : "font-semibold")}>{c.name ?? `Customer ${c.id}`}</span><span className="shrink-0 text-xs text-muted">{ago(c.last_message_at)}</span></div>
+                    <p className={cx("truncate text-sm", c.waiting ? "text-ink" : "text-muted")}>{c.last_role && c.last_role !== "user" ? (c.last_role === "agent" ? "You: " : "AI: ") : ""}{c.last_message ?? "No messages"}</p>
+                    <div className="mt-1 flex flex-wrap items-center gap-1"><ChannelBadge channel={c.channel} />{c.account_label && <span className="truncate text-xs text-muted">{c.account_label}</span>}
+                      {c.status === "handover" && <Badge tone="warn">Needs a person</Badge>}{c.ai_paused && c.status !== "handover" && <Badge>AI paused</Badge>}</div>
                   </div>
                 </button></li>
               ))}
@@ -38,7 +76,7 @@ export default function InboxPage() {
           )}
         </section>
         <section aria-label="Conversation" className={cx(!sel && "hidden lg:block")}>
-          {sel ? <Thread id={sel} onBack={() => setSp({})} /> : <Empty title="Select a conversation">Pick one on the left to read it, pause the AI, or reply yourself.</Empty>}
+          {sel ? <Thread id={sel} onBack={() => setSp({})} /> : <Empty title="Select a conversation">Pick one to read it, take over from the AI, or reply yourself.</Empty>}
         </section>
       </div>
     </>
@@ -84,7 +122,8 @@ function Thread({ id, onBack }: { id: number; onBack: () => void }) {
     <div className="flex h-full flex-col rounded-panel border border-line bg-surface">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
         <div className="flex min-w-0 items-center gap-2"><Button size="sm" variant="ghost" className="lg:hidden" onClick={onBack}>Back</Button>
-          <Avatar name={c.name} src={c.avatar_url} size={32} /><span className="truncate font-semibold">{c.name ?? `Customer ${c.id}`}</span><ChannelBadge channel={c.channel} />
+          <Avatar name={c.name} src={c.avatar_url} size={32} /><span className="min-w-0"><span className="flex items-center gap-1.5"><span className="truncate font-semibold">{c.name ?? `Customer ${c.id}`}</span><ChannelBadge channel={c.channel} /></span>
+            <span className="block truncate text-xs text-muted" title={`Guest id on ${c.channel}: ${c.guest_id ?? "-"}`}>to {c.account_label || (c.account_id ? `${c.channel === "whatsapp" ? "number" : c.channel === "instagram" ? "account" : "Page"} ${c.account_id}` : "your account")} · since {when(c.started_at)}</span></span>
           {c.profile_id && <Link className="text-sm font-semibold text-accent-strong underline" to={`/profiles/${c.profile_id}`}>View profile</Link>}
           {c.ai_paused ? <Badge tone="warn">AI paused{c.handover_reason ? `: ${c.handover_reason}` : ""}</Badge> : <Badge tone="ok">AI active</Badge>}
         </div>
@@ -93,6 +132,8 @@ function Thread({ id, onBack }: { id: number; onBack: () => void }) {
       <div className="flex items-center gap-1.5 border-b border-line bg-sunken/60 px-4 py-1.5 text-xs text-muted"><Clock className="h-3.5 w-3.5" aria-hidden />
         {open ? `Free-form replies allowed for ${Math.floor(windowLeft / 3600e3)} h ${Math.floor((windowLeft % 3600e3) / 60e3)} min` : c.channel === "whatsapp" ? "Window closed: only an approved template can be sent" : "Window closed: replies are blocked (human-agent tag not enabled or expired)"}
         {c.last_user_message_at && <span> (customer last wrote {when(c.last_user_message_at)})</span>}</div>
+      {c.comments?.length > 0 && <details className="border-b border-line px-4 py-1.5 text-xs"><summary className="cursor-pointer font-semibold text-muted">{c.comments.length} comment(s) by this person on your posts</summary>
+        <ul className="mt-1 space-y-1 pb-1">{c.comments.map((x: any) => <li key={x.id} className="flex items-start gap-2"><Link className="text-accent-strong underline" to="/comments">open</Link><span className="min-w-0"><span className="block">“{x.message}”</span>{x.post_text && <span className="block truncate text-muted">on: {x.post_text}</span>}</span></li>)}</ul></details>}
       {c.ai_paused && <div className="flex flex-wrap items-center justify-between gap-2 border-b border-warn bg-warn-soft px-4 py-2 text-sm text-warn">
         <span><strong>The AI is not replying in this chat</strong> ({c.handover_reason?.startsWith("agent:") ? "a staff member replied" : c.handover_reason?.startsWith("keyword:") ? "the guest asked for a person" : "taken over"}). It answers again on its own after a quiet period without staff replies (AI Settings), or right now:</span>
         <Button size="sm" onClick={() => toggle.mutate(false)} loading={toggle.isPending}><Play className="h-3.5 w-3.5" aria-hidden />Resume AI now</Button></div>}
