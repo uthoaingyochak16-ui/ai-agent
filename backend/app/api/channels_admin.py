@@ -193,14 +193,23 @@ async def _check_page(s, token: str, app_secret: str, cfg: ChannelConfig,
         problems.append("No app secret: every incoming message is rejected.")
     elif not await _secret_matches(s, token, app_secret):
         problems.append("App secret does not belong to the app that issued this token: incoming messages are rejected.")
-    fields = "messages,messaging_postbacks"
+    comments = cfg.channel == "messenger"   # feed: comments on the Page's posts (services/comments.py)
+    fields = "messages,messaging_postbacks" + (",feed" if comments else "")
     try:
         subs = (await _graph(s, token, "me/subscribed_apps")).get("data", [])
-        if not any("messages" in (a.get("subscribed_fields") or []) for a in subs):
-            await _graph(s, token, "me/subscribed_apps", {"subscribed_fields": fields}, method="POST")
-            notes.append("Page subscribed to the app's webhook (messages) just now.")
+        have = {f for a in subs for f in (a.get("subscribed_fields") or [])}
+        if not ({"messages", "feed"} if comments else {"messages"}) <= have:
+            try:
+                await _graph(s, token, "me/subscribed_apps", {"subscribed_fields": fields}, method="POST")
+                notes.append("Page subscribed to the app's webhook (messages, post comments) just now.")
+            except GraphError as exc:  # comments need more permissions: never lose the messages subscription for it
+                if "messages" not in have:
+                    await _graph(s, token, "me/subscribed_apps", {"subscribed_fields": "messages,messaging_postbacks"},
+                                 method="POST")
+                notes.append("Page subscribed to messages; post comments could not be subscribed (the token needs "
+                             f"pages_manage_engagement and pages_read_user_content): {exc.message}")
         else:
-            notes.append("Page is subscribed to the webhook.")
+            notes.append("Page is subscribed to the webhook (messages, post comments).")
     except GraphError as exc:
         if exc.code == 200 or "pages_manage_metadata" in exc.message:
             if last_webhook is not None:  # can't ask Meta, but messages are arriving, so the subscription works

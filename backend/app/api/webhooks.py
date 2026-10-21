@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.channels import page_comments
 from app.channels.registry import CHANNELS, get_adapter
 from app.channels.signature import verify_signature
 from app.core import crypto
@@ -17,6 +18,7 @@ from app.core.config import get_settings
 from app.core.ratelimit import rate_limit
 from app.db.session import get_session
 from app.models import ChannelConfig, WebhookEvent
+from app.services import comments
 from app.services.settings_service import get_setting
 
 logger = logging.getLogger(__name__)
@@ -99,6 +101,10 @@ async def receive(channel: str, request: Request, session: AsyncSession = Depend
         got = row.first()
         if got:  # duplicates (Meta retries) insert nothing and are not re-enqueued
             new_ids.append((got[0], 0))
+    comment_ids: list[int] = []
+    if channel in ("messenger", "instagram") and await comments.is_on(session):  # comments on posts (feed / comments field)
+        parse = page_comments.parse_feed if channel == "messenger" else page_comments.parse_ig_comments
+        comment_ids = await comments.store(session, parse(payload))
     debounce = float(await get_setting(session, "debounce_seconds") or 0)
     await session.commit()
 
@@ -114,4 +120,7 @@ async def receive(channel: str, request: Request, session: AsyncSession = Depend
                 await queue.enqueue_job("process_event_job", event_id, _job_id=f"evt-{event_id}-{attempt}")
         except Exception:  # noqa: BLE001 - the row is durable; the requeue cron will pick it up
             logger.exception("enqueue failed for event %s", event_id)
-    return {"status": "ok", "accepted": len(new_ids)}
+    delay = float(await get_setting(session, "comment_reply_delay_seconds") or 0) if comment_ids else 0
+    for cid in comment_ids:
+        await comments.enqueue(queue, cid, delay)
+    return {"status": "ok", "accepted": len(new_ids) + len(comment_ids)}

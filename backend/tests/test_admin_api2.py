@@ -311,7 +311,7 @@ async def test_channel_test_subscribes_the_page_and_checks_the_app_secret(client
     sub = respx.post(f"{G}/me/subscribed_apps").mock(return_value=httpx.Response(200, json={"success": True}))
     r = (await client.post("/api/channels/messenger/test", headers=admin)).json()
     assert r["status"] == "ok" and "subscribed" in r["status_detail"]
-    assert sub.calls[0].request.url.params["subscribed_fields"] == "messages,messaging_postbacks"
+    assert sub.calls[0].request.url.params["subscribed_fields"] == "messages,messaging_postbacks,feed"
 
     await client.put("/api/channels/messenger", headers=admin, json={"app_secret": "WRONG"})
     r = (await client.post("/api/channels/messenger/test", headers=admin)).json()
