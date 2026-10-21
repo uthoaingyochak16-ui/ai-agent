@@ -40,7 +40,7 @@ export default function Dashboard() {
   const b = d.budget;
   return (
     <>
-      <PageHeader title="Dashboard" subtitle="Real customer traffic and assistant performance at a glance."
+      <PageHeader title="Overview" subtitle="How many guests wrote, how the assistant answered them, and what needs your attention."
         actions={<Select aria-label="Period" value={days} onChange={(e) => setDays(+e.target.value)} className="w-auto"><option value={7}>Last 7 days</option><option value={14}>Last 14 days</option><option value={30}>Last 30 days</option></Select>} />
       {d.embeddings?.hash_warning && <div className="mb-5 rounded-panel border border-warn bg-warn-soft px-4 py-3 text-sm text-warn"><strong>Embedding warning:</strong> hash embeddings are for testing and give weak Bangla/Banglish semantic search. Configure OpenAI, Google, or a private local endpoint in AI Settings → Retrieval.</div>}
       {user?.role === "admin" && <SystemHealth days={days} />}
@@ -75,7 +75,7 @@ export default function Dashboard() {
         </Panel>
       </div>
       <div className="grid gap-5 lg:grid-cols-2">
-        <Panel title="Unanswered questions" actions={<Link to="/qa" className="text-sm font-semibold text-accent-strong underline">Open Q&A manager</Link>}>
+        <Panel title="Unanswered questions" actions={<Link to="/train?tab=failed" className="text-sm font-semibold text-accent-strong underline">Find why and fix</Link>}>
           <dl className="mb-3 grid grid-cols-3 gap-2 text-center">
             {[["Asked more than once", d.unanswered.repeated], ["Answer-is-wrong feedback", d.unanswered.feedback], ["Drafts awaiting approval", d.unanswered.pending_approval]].map(([k, v]) => (
               <div key={k as string} className="rounded-ctl bg-sunken p-2"><dt className="text-xs text-muted">{k}</dt><dd className="text-lg font-semibold">{num((v as number) ?? 0)}</dd></div>))}

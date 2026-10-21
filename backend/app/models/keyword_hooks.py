@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 
 @event.listens_for(Session, "after_flush")
 def _keyword_index_after_flush(session: Session, flush_context) -> None:
-    from app.models import Chunk, Document, Program, QAPair, RecordKeywords, Variable
-    tracked = (Chunk, QAPair, Variable, Program, RecordKeywords)
+    from app.models import Chunk, DataRow, DataSheet, Document, Program, QAPair, RecordKeywords, Variable
+    tracked = (Chunk, QAPair, Variable, Program, RecordKeywords, DataRow, DataSheet)
     changed = [o for o in (*session.new, *session.dirty) if isinstance(o, tracked)]
     removed = [o for o in session.deleted if isinstance(o, tracked)]
     docs_removed = [o for o in session.deleted if isinstance(o, Document)]

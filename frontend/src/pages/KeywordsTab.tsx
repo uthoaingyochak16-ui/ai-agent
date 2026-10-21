@@ -41,6 +41,8 @@ function Table({ isAdmin }: { isAdmin: boolean }) {
   const ask = useConfirm();
   const [type, setType] = useState("qa");
   const [search, setSearch] = useState("");
+  const [newKw, setNewKw] = useState("");
+  const [picked, setPicked] = useState<string[]>([]);
   const q = useQuery({ queryKey: ["kw-records", type, search], queryFn: () => api<{ total: number; items: Item[] }>("/api/keywords/records", { params: { type, search, limit: 60 } }) });
   const status = useQuery({ queryKey: ["kw-ai-status"], queryFn: () => api<any>("/api/keywords/generate-ai/status"), refetchInterval: (s) => (["queued", "running"].includes(s.state.data?.status) ? 2000 : false) });
   const refresh = () => { qc.invalidateQueries({ queryKey: ["kw-records"] }); qc.invalidateQueries({ queryKey: ["kw-tree"] }); qc.invalidateQueries({ queryKey: ["kw-stats"] }); };
@@ -53,23 +55,45 @@ function Table({ isAdmin }: { isAdmin: boolean }) {
   });
   const rebuild = useMutation({ mutationFn: () => api("/api/keywords/rebuild", { method: "POST" }), onSuccess: () => { refresh(); toast("All keywords regenerated"); }, onError: fail });
   const bulk = useMutation({ mutationFn: () => api("/api/keywords/generate-ai", { body: { types: [type], limit: 50 } }), onSuccess: () => { qc.invalidateQueries({ queryKey: ["kw-ai-status"] }); toast("Started in the background"); }, onError: fail });
+  const addMany = useMutation({
+    mutationFn: async () => {
+      const words = newKw.split(",").map((w) => w.trim()).filter(Boolean);
+      for (const key of picked) {
+        const [t, ...r] = key.split(":");
+        await api(`/api/keywords/records/${t}/${encodeURIComponent(r.join(":"))}`, { method: "PUT", body: { add: words, remove: [] } });
+      }
+      return { words: words.length, records: picked.length };
+    },
+    onSuccess: (r) => { refresh(); toast(`${r.words} keyword(s) added to ${r.records} record(s)`); setPicked([]); setNewKw(""); },
+    onError: fail,
+  });
   const st = status.data;
   useEffect(() => { if (st?.status === "done") refresh(); }, [st?.status]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <Select aria-label="Record type" value={type} onChange={(e) => setType(e.target.value)} className="w-40"><option value="qa">Q&A</option><option value="chunk">Knowledge chunks</option><option value="variable">Variables</option><option value="program">Programs</option></Select>
+        <Select aria-label="Record type" value={type} onChange={(e) => setType(e.target.value)} className="w-40"><option value="qa">Q&A</option><option value="chunk">Knowledge chunks</option><option value="variable">Values</option><option value="program">Programs</option><option value="sheetrow">Data sheet rows</option></Select>
         <Input aria-label="Search records" placeholder="Search records…" value={search} onChange={(e) => setSearch(e.target.value)} className="max-w-xs" />
         {isAdmin && <>
           <Button size="sm" loading={rebuild.isPending} onClick={() => rebuild.mutate()} title="Free: regenerates every record's keywords from its text and re-runs the uniqueness check"><RefreshCw className="h-3.5 w-3.5" aria-hidden />Generate for all</Button>
           <Button size="sm" loading={bulk.isPending} onClick={async () => (await ask({ title: "Generate keywords with the AI?", message: "Up to 50 records without AI keywords get one small AI call each (billed). Needs the “Keyword generation” route in AI Settings.", confirmLabel: "Generate" })) && bulk.mutate()}><Sparkles className="h-3.5 w-3.5" aria-hidden />Generate with AI</Button>
         </>}
       </div>
+      {isAdmin ? (
+        <form className="flex flex-wrap items-center gap-2 rounded-panel border border-accent/40 bg-accent-soft/40 p-3" onSubmit={(e) => { e.preventDefault(); if (newKw.trim() && picked.length) addMany.mutate(); }}>
+          <Plus className="h-4 w-4 text-accent-strong" aria-hidden /><span className="text-sm font-semibold">Add a keyword</span>
+          <Input aria-label="New keyword(s), comma separated" persistDraft={false} placeholder="e.g. boi, বই, book" value={newKw} onChange={(e) => setNewKw(e.target.value)} className="max-w-xs" />
+          <span className="text-sm text-muted">{newKw.trim() ? (picked.length ? `to ${picked.length} ticked record(s)` : "then tick the records it belongs to below") : "words guests use for a record"}</span>
+          <Button size="sm" type="submit" variant="primary" disabled={!newKw.trim() || !picked.length} loading={addMany.isPending}>Add</Button>
+          {picked.length > 0 && <Button size="sm" variant="ghost" onClick={() => setPicked([])}>Clear ticks</Button>}
+        </form>
+      ) : <p className="text-sm text-muted">Only an admin can add or remove keywords.</p>}
       {st && st.status !== "idle" && <p className="text-sm text-muted" role="status">AI keywords: {st.status}{st.total ? ` — ${st.done}/${st.total}` : ""}{st.kept !== undefined && ` · kept ${st.kept}, dropped ${st.rejected} not in the record`}{st.error && <span className="text-danger"> · {st.error}</span>}</p>}
       <ErrorNote error={q.error} />
       {q.isLoading ? <Spinner /> : !q.data?.items.length ? <Empty title="No records">Nothing to show here yet.</Empty> : (
         <div className="space-y-2">
           {q.data.items.map((it) => <Row key={`${it.type}:${it.ref}`} it={it} isAdmin={isAdmin} busy={gen.isPending || edit.isPending}
+            picking={!!newKw.trim()} picked={picked.includes(`${it.type}:${it.ref}`)} onPick={(v) => { const k = `${it.type}:${it.ref}`; setPicked(v ? [...picked, k] : picked.filter((x) => x !== k)); }}
             onAdd={(w) => edit.mutate({ it, add: [w] })} onRemove={(stem) => edit.mutate({ it, remove: [stem] })} onGen={(ai) => gen.mutate({ it, ai })} />)}
           {q.data.total > q.data.items.length && <p className="text-xs text-muted">Showing {q.data.items.length} of {q.data.total}. Use search to narrow.</p>}
         </div>
@@ -78,13 +102,14 @@ function Table({ isAdmin }: { isAdmin: boolean }) {
   );
 }
 
-function Row({ it, isAdmin, busy, onAdd, onRemove, onGen }: { it: Item; isAdmin: boolean; busy: boolean; onAdd: (w: string) => void; onRemove: (stem: string) => void; onGen: (ai: boolean) => void }) {
+function Row({ it, isAdmin, busy, picking, picked, onPick, onAdd, onRemove, onGen }: { it: Item; isAdmin: boolean; busy: boolean; picking: boolean; picked: boolean; onPick: (v: boolean) => void; onAdd: (w: string) => void; onRemove: (stem: string) => void; onGen: (ai: boolean) => void }) {
   const [w, setW] = useState("");
   const shown = it.keywords.filter((k) => k.origin !== "phrase");
   return (
     <div className="rounded-panel border border-line bg-surface p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0"><p className="truncate font-medium">{it.title}</p><p className="truncate text-xs text-muted">{it.subtitle}</p></div>
+        <label className="flex min-w-0 items-start gap-2">{picking && <input type="checkbox" className="mt-1" checked={picked} onChange={(e) => onPick(e.target.checked)} aria-label={`Add the new keyword to ${it.title}`} />}
+          <span className="min-w-0"><span className="block truncate font-medium">{it.title}</span><span className="block truncate text-xs text-muted">{it.subtitle}</span></span></label>
         <div className="flex items-center gap-2"><Badge tone={it.unique ? "ok" : "warn"}>{it.unique} unique</Badge>{it.ai_at && <Badge tone="ok">AI</Badge>}
           {isAdmin && <><Button size="sm" disabled={busy} onClick={() => onGen(false)} title="Regenerate from the text and check uniqueness"><RefreshCw className="h-3.5 w-3.5" aria-hidden />Regenerate</Button><Button size="sm" disabled={busy} onClick={() => onGen(true)} title="Ask the AI (billed); only words found in the record are kept"><Sparkles className="h-3.5 w-3.5" aria-hidden />AI</Button></>}</div>
       </div>

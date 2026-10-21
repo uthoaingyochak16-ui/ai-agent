@@ -69,7 +69,11 @@ async def list_unanswered(limit: int = 100, status: str | None = None, session: 
 
 
 class UnknownIn(BaseModel):
-    status: str = Field(pattern="^(new|reviewing|ignored)$")  # "approved" only by saving the Q&A ("Add answer")
+    status: str | None = Field(None, pattern="^(new|reviewing|ignored)$")  # "approved" only by saving the Q&A ("Add answer")
+    # staff's edits of the AI's suggestion (still a draft: nothing goes live until "Add answer" saves the Q&A)
+    draft_answer: str | None = Field(None, max_length=4000)
+    suggested_category: str | None = Field(None, max_length=64)
+    suggested_keywords: list[str] | None = Field(None, max_length=30)
 
 
 @router.patch("/unanswered/{uid}")
@@ -77,7 +81,16 @@ async def set_unknown_status(uid: int, body: UnknownIn, session: AsyncSession = 
     u = await session.get(UnansweredQuestion, uid)
     if not u:
         raise HTTPException(404, "Not found")
-    learning.set_status(u, body.status)
+    if body.status:
+        learning.set_status(u, body.status)
+    if body.draft_answer is not None:
+        u.draft_answer = body.draft_answer.strip() or None
+    if body.suggested_category is not None:
+        u.suggested_category = _category(body.suggested_category.strip()) or body.suggested_category.strip() or None
+    if body.suggested_keywords is not None:
+        u.suggested_keywords = list(dict.fromkeys(k.strip()[:60] for k in body.suggested_keywords if k.strip()))
+    if (body.draft_answer or body.suggested_category or body.suggested_keywords) and u.status == "new":
+        learning.set_status(u, "reviewing")
     await session.commit()
     return _unknown_row(u)
 

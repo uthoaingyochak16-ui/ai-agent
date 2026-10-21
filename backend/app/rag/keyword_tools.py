@@ -17,7 +17,7 @@ from app.rag.keyword_index import Rec, _load, _topic, reindex_keys, rows_for
 from app.rag.keyword_search import _prepare
 
 logger = logging.getLogger(__name__)
-TYPES = ("qa", "chunk", "variable", "program")
+TYPES = ("qa", "chunk", "variable", "program", "sheetrow")
 
 
 # ---- records (titles for the table and the tree) ------------------------------------------------------------------------
@@ -38,6 +38,12 @@ async def titles_of(session: AsyncSession, keys) -> dict[tuple[str, str], str]:
     if by.get("program"):
         for i, n in (await session.execute(select(Program.id, Program.name).where(Program.id.in_([int(x) for x in by["program"]])))).all():
             out[("program", str(i))] = n
+    if by.get("sheetrow"):
+        from app.models import DataRow, DataSheet
+        for r, sh in (await session.execute(select(DataRow, DataSheet).join(DataSheet, DataRow.sheet_id == DataSheet.id)
+                                            .where(DataRow.id.in_([int(x) for x in by["sheetrow"]])))).all():
+            first = (r.values or {}).get((sh.columns or [{}])[0].get("key", ""), "")
+            out[("sheetrow", str(r.id))] = f"{sh.name}: {first}"[:90]
     return out
 
 
@@ -62,6 +68,16 @@ async def list_records(session: AsyncSession, st: str, *, search: str | None, li
         if s:
             q = q.where(or_(Variable.key.ilike(s), Variable.description.ilike(s)))
         rows = [(k, k + (f" — {d}" if d else ""), v[:100]) for k, d, v in (await session.execute(q.order_by(Variable.key).limit(limit).offset(offset))).all()]
+        total = (await session.execute(select(func.count()).select_from(q.subquery()))).scalar_one()
+    elif st == "sheetrow":
+        from app.models import DataRow, DataSheet
+        q = select(DataRow.id, DataRow.values, DataSheet.name, DataSheet.columns).join(DataSheet, DataRow.sheet_id == DataSheet.id)
+        if s:
+            q = q.where(or_(DataRow.search_text.ilike(s.lower()), DataSheet.name.ilike(s)))
+        rows = []
+        for i, vals, name, cols in (await session.execute(q.order_by(DataSheet.name, DataRow.position, DataRow.id).limit(limit).offset(offset))).all():
+            cells = [str((vals or {}).get(c["key"], "")) for c in cols or []]
+            rows.append((str(i), f"{name}: {cells[0] if cells else ''}"[:90], " · ".join(x for x in cells[1:] if x)[:120]))
         total = (await session.execute(select(func.count()).select_from(q.subquery()))).scalar_one()
     else:
         q = select(Program.id, Program.name, Program.place)
@@ -283,6 +299,9 @@ async def pending_ai_records(session: AsyncSession, types: list[str], limit: int
             q = select(Chunk.id).join(Document, Chunk.document_id == Document.id).outerjoin(RecordKeywords, join(cast(Chunk.id, String)))                 .where(Document.status == "ready", unkeyed(st, None)).order_by(Chunk.id)
         elif st == "variable":
             q = select(Variable.key).outerjoin(RecordKeywords, join(Variable.key)).where(unkeyed(st, None)).order_by(Variable.key)
+        elif st == "sheetrow":
+            from app.models import DataRow
+            q = select(DataRow.id).outerjoin(RecordKeywords, join(cast(DataRow.id, String))).where(unkeyed(st, None)).order_by(DataRow.id)
         else:
             q = select(Program.id).outerjoin(RecordKeywords, join(cast(Program.id, String))).where(unkeyed(st, None)).order_by(Program.id)
         todo += [(st, str(r)) for r in (await session.execute(q.limit(left))).scalars()]

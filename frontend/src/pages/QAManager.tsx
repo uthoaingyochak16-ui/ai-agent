@@ -2,14 +2,17 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, Pencil, Plus, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Badge, Button, Empty, ErrorNote, Field, IconButton, Input, Modal, PageHeader, Panel, Select, Spinner, Switch, TableWrap, Tabs, Td, Textarea, Th, useConfirm, useToast } from "../components/ui";
+import { Badge, Button, Empty, ErrorNote, Field, IconButton, Input, Modal, Panel, Select, Spinner, Switch, TableWrap, Td, Textarea, Th, useConfirm, useToast } from "../components/ui";
 import { api, download } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import KeywordsTab from "./KeywordsTab";
 
 type QA = { id?: number; question: string; answer_template: string; category: string | null; data_class: "fixed" | "variable"; active: boolean; resolve_unanswered_id?: number };
 
-export default function QAManager() {
+export type QAView = "fixed" | "unknown" | "variables" | "programs" | "keywords";
+
+/** One part of the Q&A data, chosen by the Knowledge page's side bar (no tab bar of its own). */
+export default function QAManager({ view = "fixed" }: { view?: QAView }) {
   const loc = useLocation();
   const navigate = useNavigate();
   const pre = loc.state as { question?: string; unansweredId?: number } | null;
@@ -17,7 +20,7 @@ export default function QAManager() {
   const toast = useToast();
   const ask = useConfirm();
   const isAdmin = useAuth().user?.role === "admin";
-  const [tab, setTab] = useState<"fixed" | "unknown" | "variables" | "programs" | "keywords">("fixed");
+  const tab = view;
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
   const [editing, setEditing] = useState<QA | null>(pre?.question ? { question: pre.question, answer_template: "", category: null, data_class: "fixed", active: true, resolve_unanswered_id: pre.unansweredId } : null);
@@ -43,38 +46,18 @@ export default function QAManager() {
   });
   return (
     <>
-      <PageHeader title="Q&A manager" subtitle="Fixed data stays the same. Variable data uses {variable} values that may change occasionally. Program dates and places are managed only in Programs."
-        actions={<>
+      {tab === "fixed" && <div className="mb-4 flex flex-wrap items-start justify-between gap-3"><p className="max-w-3xl text-sm text-muted">Exact answers for common questions. Fixed data never changes; variable data uses {"{variable}"} values (fees, phones, dates) you update in one place. Program dates and places are managed in Programs.</p><div className="flex flex-wrap gap-2">{<>
           <input ref={imp} type="file" accept=".csv,.tsv,.json,.jsonl,.xlsx,.xlsm" className="sr-only" aria-label="Import a Q&A file" onChange={(e) => e.target.files?.[0] && importCsv.mutate(e.target.files[0])} />
           <Button size="sm" onClick={() => imp.current?.click()} loading={importCsv.isPending} title="CSV, Excel or JSON with question and answer columns"><Upload className="h-3.5 w-3.5" aria-hidden />Import file</Button>
           <Button size="sm" onClick={() => download("/api/qa-export", "qa_pairs.csv").catch(() => toast("Export failed", "danger"))}><Download className="h-3.5 w-3.5" aria-hidden />Export CSV</Button>
-          <Button variant="primary" onClick={() => setEditing({ question: "", answer_template: "", category: null, data_class: "fixed", active: true })}><Plus className="h-4 w-4" aria-hidden />Add Q&A</Button></>} />
-      <Tabs tabs={[{ id: "unknown", label: `Unknown questions${unanswered.data ? ` (${unanswered.data.length})` : ""}` }, { id: "fixed", label: `Fixed data${tab === "fixed" && list.data ? ` (${list.data.total})` : ""}` }, { id: "variables", label: "Variable data" }, { id: "programs", label: "Programs" }, { id: "keywords", label: "Keywords" }]} value={tab} onChange={setTab} />
+          <Button variant="primary" onClick={() => setEditing({ question: "", answer_template: "", category: null, data_class: "fixed", active: true })}><Plus className="h-4 w-4" aria-hidden />Add Q&A</Button></>}</div></div>}
       {tab === "unknown" && <div>
           {!!unanswered.data?.length ? <Panel title="Unknown questions">
             <p className="mb-3 text-sm text-muted">Questions the assistant could not answer, and replies marked wrong, most asked first. A repeat of the same question raises its count instead of adding a row. Suggestions and drafts are never used until you save them with “Add answer”.</p>
-            <ul className="divide-y divide-line">{unanswered.data.map((u) => <li key={u.id} className="flex flex-wrap items-start justify-between gap-3 py-3">
-              <div className="min-w-0 flex-1">
-                <span className="block break-words font-medium">{u.question}</span>
-                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
-                  <Badge tone={u.occurrences > 1 ? "warn" : "neutral"}>asked {u.occurrences}×</Badge>
-                  <Badge tone={u.status === "reviewing" ? "blue" : "neutral"}>{u.status}</Badge>
-                  {u.reason === "wrong_answer" && <Badge tone="danger">answer marked wrong</Badge>}
-                  {u.reason === "needs_review" && <Badge tone="warn">needs review</Badge>}
-                  {u.suggested_category && <Badge tone="accent">{u.suggested_category}</Badge>}
-                  {u.suggested_keywords?.slice(0, 6).map((k: string) => <span key={k}>#{k}</span>)}
-                  <span>· {u.channel || "unknown channel"}</span>
-                </div>
-                {u.wrong_answer && <p className="mt-1 break-words text-xs text-muted"><span className="font-semibold">Wrong reply:</span> {u.wrong_answer}</p>}
-                {u.draft_answer && <p className="mt-1 whitespace-pre-wrap break-words rounded-ctl bg-sunken p-2 text-sm"><span className="font-semibold">Suggested answer (draft):</span> {u.draft_answer}</p>}
-              </div>
-              <div className="flex shrink-0 flex-wrap gap-2">
-                <Button size="sm" loading={draft.isPending && draft.variables === u.id} onClick={() => draft.mutate(u.id)}>Suggest draft</Button>
-                <Button size="sm" onClick={() => navigate("/evaluation", { state: { question: u.question } })}>Add to eval set</Button>
-                <Button size="sm" onClick={() => setUnknownStatus.mutate({ id: u.id, status: "ignored" })}>Ignore</Button>
-                <Button size="sm" variant="primary" onClick={() => { if (u.status === "new") setUnknownStatus.mutate({ id: u.id, status: "reviewing" }); setEditing({ question: u.question, answer_template: u.draft_answer ?? "", category: u.suggested_category ?? null, data_class: "fixed", active: true, resolve_unanswered_id: u.id }); }}>Add answer</Button>
-              </div>
-            </li>)}</ul>
+            <ul className="divide-y divide-line">{unanswered.data.map((u) => <UnknownItem key={u.id} u={u} drafting={draft.isPending && draft.variables === u.id}
+              onDraft={() => draft.mutate(u.id)} onIgnore={() => setUnknownStatus.mutate({ id: u.id, status: "ignored" })}
+              onTest={() => navigate("/train?tab=tests", { state: { question: u.question } })}
+              onAnswer={(answer, category) => { if (u.status === "new") setUnknownStatus.mutate({ id: u.id, status: "reviewing" }); setEditing({ question: u.question, answer_template: answer, category: category || null, data_class: "fixed", active: true, resolve_unanswered_id: u.id }); }} />)}</ul>
           </Panel> : unanswered.isLoading ? <Spinner /> : <Empty title="No unknown questions">Questions the assistant cannot answer will appear here.</Empty>}
         </div>}
       {tab === "fixed" && <div>
@@ -96,6 +79,59 @@ export default function QAManager() {
       {tab === "keywords" && <KeywordsTab isAdmin={isAdmin} />}
       {editing && <QAEditor qa={editing} categories={list.data?.categories ?? []} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); qc.invalidateQueries({ queryKey: ["qa"] }); qc.invalidateQueries({ queryKey: ["unanswered"] }); qc.invalidateQueries({ queryKey: ["dashboard"] }); toast("Saved"); }} />}
     </>
+  );
+}
+
+/** One unknown question. The AI's suggestion (answer, category, keywords) can be edited and kept as a draft, then
+ *  turned into a Q&A with "Add answer"; nothing is live before that. */
+function UnknownItem({ u, drafting, onDraft, onIgnore, onTest, onAnswer }: { u: any; drafting: boolean; onDraft: () => void; onIgnore: () => void; onTest: () => void; onAnswer: (answer: string, category: string) => void }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [answer, setAnswer] = useState(u.draft_answer ?? "");
+  const [category, setCategory] = useState(u.suggested_category ?? "");
+  const [keywords, setKeywords] = useState((u.suggested_keywords ?? []).join(", "));
+  useEffect(() => { setAnswer(u.draft_answer ?? ""); setCategory(u.suggested_category ?? ""); setKeywords((u.suggested_keywords ?? []).join(", ")); }, [u.draft_answer, u.suggested_category, u.suggested_keywords]);
+  const changed = answer !== (u.draft_answer ?? "") || category !== (u.suggested_category ?? "") || keywords !== (u.suggested_keywords ?? []).join(", ");
+  const save = useMutation({
+    mutationFn: () => api(`/api/unanswered/${u.id}`, { method: "PATCH", body: { draft_answer: answer, suggested_category: category, suggested_keywords: keywords.split(",").map((k: string) => k.trim()).filter(Boolean) } }),
+    onSuccess: () => { toast("Suggestion saved (still a draft)"); qc.invalidateQueries({ queryKey: ["unanswered"] }); },
+  });
+  return (
+    <li className="py-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <span className="block break-words font-medium">{u.question}</span>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
+            <Badge tone={u.occurrences > 1 ? "warn" : "neutral"}>asked {u.occurrences}×</Badge>
+            <Badge tone={u.status === "reviewing" ? "blue" : "neutral"}>{u.status}</Badge>
+            {u.reason === "wrong_answer" && <Badge tone="danger">answer marked wrong</Badge>}
+            {u.reason === "needs_review" && <Badge tone="warn">needs review</Badge>}
+            <span>· {u.channel || "unknown channel"}</span>
+          </div>
+          {u.wrong_answer && <p className="mt-1 break-words text-xs text-muted"><span className="font-semibold">Wrong reply:</span> {u.wrong_answer}</p>}
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <Button size="sm" loading={drafting} onClick={onDraft}>{u.draft_answer ? "Suggest again" : "Suggest an answer"}</Button>
+          <Button size="sm" onClick={onTest}>Add to test set</Button>
+          <Button size="sm" onClick={onIgnore}>Ignore</Button>
+        </div>
+      </div>
+      <div className="mt-2 grid gap-2 rounded-ctl border border-line bg-sunken/50 p-2.5 lg:grid-cols-[1fr_220px]">
+        <div>
+          <p className="mb-1 text-xs font-semibold text-muted">{u.draft_answer ? "AI suggestion: edit it as you like" : "Answer (write it, or click Suggest an answer)"}</p>
+          <Textarea persistDraft={false} rows={3} aria-label={`Answer for ${u.question}`} value={answer} onChange={(e) => setAnswer(e.target.value)} placeholder="The answer guests should get" />
+        </div>
+        <div className="space-y-2">
+          <div><p className="mb-1 text-xs font-semibold text-muted">Category</p><Input persistDraft={false} aria-label="Category" value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. Courses" /></div>
+          <div><p className="mb-1 text-xs font-semibold text-muted">Keywords</p><Input persistDraft={false} aria-label="Keywords, comma separated" value={keywords} onChange={(e) => setKeywords(e.target.value)} placeholder="comma separated" /></div>
+        </div>
+        <div className="flex flex-wrap justify-end gap-2 lg:col-span-2">
+          <Button size="sm" disabled={!changed} loading={save.isPending} onClick={() => save.mutate()}>Save suggestion</Button>
+          <Button size="sm" variant="primary" disabled={!answer.trim()} onClick={() => onAnswer(answer, category)}>Add answer</Button>
+        </div>
+        <ErrorNote error={save.error} />
+      </div>
+    </li>
   );
 }
 

@@ -281,6 +281,11 @@ async def keyword_retrieve(session: AsyncSession, llm: LLMService, *, text: str,
     progs = {p.id: p for p in (await session.execute(select(Program).where(
         Program.id.in_([int(m.ref) for m in cands if m.source_type == "program"])))).scalars() if p.last_day >= today}
     variables = {v.key: v.value for v in (await session.execute(select(Variable))).scalars()} if qas else {}
+    from app.models import DataRow, DataSheet
+    from app.services.sheets import row_line
+    sheet_rows = {r.id: (r, sh) for r, sh in (await session.execute(
+        select(DataRow, DataSheet).join(DataSheet, DataRow.sheet_id == DataSheet.id).where(
+            DataRow.id.in_([int(m.ref) for m in cands if m.source_type == "sheetrow"]), DataSheet.active.is_(True)))).all()}
 
     # Tie-breaker: of two records covering the same keywords, the one whose own question is mostly about what was asked
     # wins ("কোর্সে রেজিস্ট্রেশন করব কীভাবে?" over a record that merely also mentions the course)
@@ -328,6 +333,9 @@ async def keyword_retrieve(session: AsyncSession, llm: LLMService, *, text: str,
             extra.append("VALUE — " + variable_answer(vrs[m.ref]))
         elif m.source_type == "program" and int(m.ref) in progs:
             extra.append(context_line(progs[int(m.ref)], today))
+        elif m.source_type == "sheetrow" and int(m.ref) in sheet_rows:
+            r, sh = sheet_rows[int(m.ref)]
+            extra.append(row_line(sh, r.values or {}))
         else:
             continue
         picked.append({"type": m.source_type, "ref": m.ref, "score": round(m.score, 3), "coverage": round(m.coverage, 3)})

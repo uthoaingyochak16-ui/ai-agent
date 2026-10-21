@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ban, CheckCircle2, CloudUpload, FileText, Pencil, Plus, RefreshCw, Search, Trash2, Upload, X } from "lucide-react";
 import { useRef, useState, type DragEvent, type ReactNode } from "react";
-import { Badge, Button, Empty, ErrorNote, Field, IconButton, Input, Modal, PageHeader, Select, Spinner, Switch, TableWrap, Tabs, Td, Textarea, Th, cx, useToast, useConfirm } from "../components/ui";
+import { Badge, Button, Empty, ErrorNote, Field, IconButton, Input, Modal, Select, Spinner, Switch, TableWrap, Td, Textarea, Th, cx, useToast, useConfirm } from "../components/ui";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { ago } from "../lib/format";
@@ -11,41 +11,20 @@ const LABEL: Record<string, string> = { pending: "Waiting", processing: "Process
 const FORMATS = ["PDF", "Word", "Excel", "PowerPoint", "CSV", "JSON", "TXT", "HTML", "RTF", "EPUB", "ZIP", "Images (OCR)"];
 const MAX_MB = 50;
 const size = (b: number) => (b > 1024 * 1024 ? `${(b / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
-type Tab = "documents" | "cache" | "search";
+export type DocView = "documents" | "cache" | "search";
 
-export default function Knowledge() {
+/** Documents, saved answers or the search test, chosen by the Knowledge page's side bar. */
+export default function Knowledge({ view = "documents" }: { view?: DocView }) {
   const { user } = useAuth();
   const admin = user?.role === "admin";
   const qc = useQueryClient();
-  const [tab, setTab] = useState<Tab>("documents");
+  const tab = view;
   const [uploading, setUploading] = useState(false);
   const docs = useQuery({ queryKey: ["docs"], queryFn: () => api<any[]>("/api/documents"), refetchInterval: (q) => (q.state.data?.some((d: any) => d.status === "pending" || d.status === "processing") ? 2000 : false) });
-  const cache = useQuery({ queryKey: ["cache", "", ""], queryFn: () => api<any>("/api/cache", { params: { search: "", status: "", limit: 100 } }) });
-
-  const all = docs.data ?? [];
-  const live = all.filter((d) => d.status !== "superseded");
-  const ready = live.filter((d) => d.status === "ready");
-  const busy = live.filter((d) => d.status === "pending" || d.status === "processing").length;
-  const failed = live.filter((d) => d.status === "failed").length;
 
   return (
     <>
-      <PageHeader title="Knowledge base" subtitle="The documents the assistant answers from, the answers it has saved, and a way to test what it finds."
-        actions={admin && <Button variant="primary" onClick={() => setUploading(true)}><Upload className="h-4 w-4" aria-hidden />Upload document</Button>} />
-
-      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat label="Documents" value={docs.data ? ready.length : "–"} note={docs.data && live.length !== ready.length ? `of ${live.length}` : undefined} />
-        <Stat label="Text pieces" value={docs.data ? ready.reduce((n, d) => n + (d.chunk_count ?? 0), 0) : "–"} />
-        <Stat label="Needs attention" value={docs.data ? failed + busy : "–"} tone={failed ? "danger" : busy ? "warn" : undefined}
-          note={failed ? `${failed} failed` : busy ? `${busy} processing` : docs.data ? "All good" : undefined} />
-        <Stat label="Saved answers" value={cache.data ? cache.data.total : "–"} />
-      </div>
-
-      <Tabs<Tab> value={tab} onChange={setTab} tabs={[
-        { id: "documents", label: `Documents${docs.data ? ` (${live.length})` : ""}` },
-        { id: "cache", label: `Saved answers${cache.data ? ` (${cache.data.total})` : ""}` },
-        { id: "search", label: "Search test" },
-      ]} />
+      {tab === "documents" && <div className="mb-4 flex flex-wrap items-start justify-between gap-3"><p className="max-w-3xl text-sm text-muted">Files the assistant reads to answer: PDFs, Word, Excel, text. Upload a new version to replace one.</p><div className="flex flex-wrap gap-2">{admin && <Button variant="primary" onClick={() => setUploading(true)}><Upload className="h-4 w-4" aria-hidden />Upload document</Button>}</div></div>}
 
       {tab === "documents" && <Documents admin={admin} docs={docs} onUpload={() => setUploading(true)} />}
       {tab === "cache" && <SavedAnswers admin={admin} />}
@@ -53,16 +32,6 @@ export default function Knowledge() {
 
       {uploading && <UploadModal onClose={() => setUploading(false)} onDone={() => { setUploading(false); qc.invalidateQueries({ queryKey: ["docs"] }); }} />}
     </>
-  );
-}
-
-function Stat({ label, value, note, tone }: { label: string; value: ReactNode; note?: string; tone?: "warn" | "danger" }) {
-  return (
-    <div className="rounded-panel border border-line bg-surface px-4 py-3">
-      <p className="text-xs font-semibold text-muted">{label}</p>
-      <p className={cx("mt-1 text-2xl font-bold tabular-nums", tone === "danger" && "text-danger", tone === "warn" && "text-warn")}>{value}</p>
-      {note && <p className="text-xs text-muted">{note}</p>}
-    </div>
   );
 }
 

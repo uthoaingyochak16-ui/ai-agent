@@ -9,6 +9,7 @@ Structure (table keyword_entries, one row per keyword stem and record; `origin` 
                          · its rarest words (2.0 signature) · adjacent question words (3.5 phrase)
     qa (Q&A pair)        question · category · answer words, the same way
     variable             name and description          program   name · place · fee, notes, dates
+    sheetrow             a data-sheet row: first column (title) · sheet name · sheet description · other cells
 
 On top of the automatic keywords: keywords added by hand / by the AI (2.8-3.0, kept in record_keywords), and "unique"
 keywords the uniqueness check gives to records that would otherwise look alike. A keyword is stored as a stem
@@ -26,7 +27,7 @@ from types import SimpleNamespace
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from app.models import Chunk, Document, KeywordEntry, Program, QAPair, RecordKeywords, Variable
+from app.models import Chunk, DataRow, DataSheet, Document, KeywordEntry, Program, QAPair, RecordKeywords, Variable
 from app.rag.keyword_gen import (W_BODY, W_DOC, W_META, W_TITLE, W_BY_ORIGIN, Kw, extra_keywords, find_unique,  # noqa: F401
                                  generate_keywords, look_alikes, meta_terms, stem_of, terms_of)
 
@@ -71,6 +72,11 @@ def rec_program(p) -> Rec:
     return Rec("program", str(p.id), None, title=p.name, meta=p.place, body=extra)
 
 
+def rec_sheetrow(r, sheet) -> Rec:
+    from app.services.sheets import index_parts
+    return Rec("sheetrow", str(r.id), None, **index_parts(sheet, r.values or {}))
+
+
 def _ref(o) -> tuple[str, str]:
     if isinstance(o, Chunk):
         return "chunk", str(o.id)
@@ -78,6 +84,8 @@ def _ref(o) -> tuple[str, str]:
         return "qa", str(o.id)
     if isinstance(o, Variable):
         return "variable", o.key
+    if isinstance(o, DataRow):
+        return "sheetrow", str(o.id)
     return "program", str(o.id)
 
 
@@ -119,6 +127,12 @@ def _load(conn, st: str, ref: str) -> Rec | None:
     if st == "variable":
         r = conn.execute(select(Variable.key, Variable.description).where(Variable.key == ref)).first()
         return rec_variable(SimpleNamespace(key=r[0], description=r[1])) if r else None
+    if st == "sheetrow":
+        r = conn.execute(select(DataRow.id, DataRow.values, DataSheet.name, DataSheet.description, DataSheet.columns)
+                         .join(DataSheet, DataRow.sheet_id == DataSheet.id)
+                         .where(DataRow.id == int(ref), DataSheet.active.is_(True))).first()
+        return rec_sheetrow(SimpleNamespace(id=r[0], values=r[1]),
+                            SimpleNamespace(name=r[2], description=r[3], columns=r[4])) if r else None
     cols = [Program.id, Program.name, Program.place, Program.notes] + [getattr(Program, c) for c in ("fee", "date_text") if hasattr(Program, c)]
     r = conn.execute(select(*cols).where(Program.id == int(ref))).first()
     return rec_program(SimpleNamespace(**dict(zip([c.key for c in cols], r)))) if r else None
@@ -168,11 +182,15 @@ def apply_changes(conn, changed: list, removed: list, docs_removed: list) -> Non
             recs[_ref(o)] = rec_variable(o)
         elif isinstance(o, Program):
             recs[_ref(o)] = rec_program(o)
+        elif isinstance(o, DataRow):
+            touched.add(_ref(o))           # loaded below with its sheet (an inactive sheet's rows leave the index)
+        elif isinstance(o, DataSheet):     # renamed / described / columns / switched on or off: all its rows again
+            touched |= {("sheetrow", str(i)) for i in conn.execute(select(DataRow.id).where(DataRow.sheet_id == o.id)).scalars()}
     for key in touched - set(recs):          # only its keyword edits changed: load the record itself
         rec = _load(conn, *key)
         if rec is not None:
             recs[key] = rec
-    gone = {_ref(o) for o in removed if not isinstance(o, RecordKeywords)} | touched | set(recs)
+    gone = {_ref(o) for o in removed if not isinstance(o, (RecordKeywords, DataSheet))} | touched | set(recs)
     by_type: dict[str, set[str]] = {}
     for t, r in gone:
         by_type.setdefault(t, set()).add(r)
@@ -263,6 +281,10 @@ async def _load_all(session) -> dict[tuple[str, str], Rec]:
     for p in await upcoming(session):
         rec = rec_program(p)
         recs[rec.key] = rec
+    for r, sheet in (await session.execute(select(DataRow, DataSheet).join(DataSheet, DataRow.sheet_id == DataSheet.id)
+                                           .where(DataSheet.active.is_(True)))).all():
+        rec = rec_sheetrow(r, sheet)
+        recs[rec.key] = rec
     return recs
 
 
@@ -302,7 +324,7 @@ async def rebuild_index(session) -> dict:
             saved.append({"source_type": key[0], "source_ref": key[1], "added": new_added, "removed": off})
 
     await session.execute(delete(KeywordEntry))
-    counts = {"chunk": 0, "qa": 0, "variable": 0, "program": 0}
+    counts = {"chunk": 0, "qa": 0, "variable": 0, "program": 0, "sheetrow": 0}
     pending: list[dict] = []
     for key, rows in rows_by.items():
         counts[key[0]] += 1

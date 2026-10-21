@@ -86,7 +86,7 @@ export default function Channels() {
   const q = useQuery({ queryKey: ["channels"], queryFn: () => api<any[]>("/api/channels") });
   return (
     <>
-      <PageHeader title="Channels" subtitle="Connect as many Facebook Pages, Instagram accounts and WhatsApp numbers as you need, then test each one. Tokens and secrets are encrypted." />
+      <PageHeader title="Pages and numbers" subtitle="Connect as many Facebook Pages, Instagram accounts and WhatsApp numbers as you need, then test each one. All of them arrive in one Inbox. Tokens and secrets are encrypted." />
       {q.isLoading ? <Spinner /> : <div className="space-y-5">{q.data?.map((ch) => <ChannelSection key={ch.channel} ch={ch} />)}</div>}
     </>
   );
