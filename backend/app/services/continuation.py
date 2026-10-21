@@ -35,4 +35,6 @@ def reply_to_our_question(text: str, history: list[tuple[str, str]]) -> str | No
 CONTINUE_NOTE = ("CONTINUE: the QUESTION is the guest's short answer to the question you asked in your last message. "
                  "Work out what that answer means (yes / no / a choice / a place...) and take the next helpful step from "
                  "CONTEXT - for example the details, steps or link they now need. Do not ask what they mean. "
+                 "A bare acknowledgement (\"ok\", \"thik ache\", \"accha\") of what you said is not a request: reply in "
+                 "one short sentence and repeat nothing you already told them. "
                  "Reply NO_ANSWER only if CONTEXT has nothing for what they now want.")

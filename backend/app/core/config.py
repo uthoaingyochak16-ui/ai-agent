@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     http_timeout_s: float = 15.0
     http_max_retries: int = 3
 
+    # Capacity. A guest message being answered holds 2-3 database connections (its per-guest lock, its session, the
+    # AI call log), so the pool must be about 2.5 x worker_max_jobs. backend + worker together stay under Postgres'
+    # max_connections (100 by default).
+    worker_max_jobs: int = 20          # messages / comments answered at the same time by one worker
+    db_pool_size: int = 15
+    db_max_overflow: int = 25
+
     public_base_url: str = "http://localhost:8000"   # shown on the Channels page as the webhook base
     embedding_dim: int = 1024          # pgvector column size; changing it requires a migration + re-embedding
     default_phone_region: str = "BD"

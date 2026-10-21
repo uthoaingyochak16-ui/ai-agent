@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ProfileFact
 from app.rag.districts import district_name, find_districts
-from app.rag.programs import programs_in_district, quoted, upcoming
+from app.rag.programs import format_dates, programs_in_district, quoted, upcoming
 from app.services import consent as consent_svc
 from app.services.language import style
 from app.services.reply_style import PROGRAM_TYPES, is_program_related
@@ -44,22 +44,34 @@ async def _known_location(session: AsyncSession, p) -> str | None:
     return "(held until consent)" if held else None
 
 
-async def _suggestions(session: AsyncSession, district: str, lang: str) -> str | None:
-    found = programs_in_district(await upcoming(session), district)[:MAX_SUGGESTIONS]
+async def _suggestions(session: AsyncSession, district: str, lang: str, skip_text: str = "") -> str | None:
+    """The upcoming programs in the district as one message: the template for a single one, a short list for several.
+    skip_text: the answer just sent; programs it already names are not repeated."""
+    found = [p for p in programs_in_district(await upcoming(session), district) if p.name not in skip_text][:MAX_SUGGESTIONS]
     if not found:
         return None
     key = "program_nearby_reply_en" if lang == "en" else "program_nearby_reply"
-    tpl = (await get_setting(session, key)) or await get_setting(session, "program_nearby_reply")
-    return "\n".join(tpl.replace("{program_name}", quoted(p.name)).replace("${program_name}", quoted(p.name))
-                     .replace("{place}", p.place or "").replace("${place}", p.place or "") for p in found)
+    if len(found) == 1:
+        tpl = (await get_setting(session, key)) or await get_setting(session, "program_nearby_reply")
+        return _fill(tpl, found[0], lang)
+    intro = await _text(session, "program_nearby_list_intro", lang)
+    return "\n".join([intro, *(_fill("• {program_name} — {date}, {place}", p, lang) for p in found)])
+
+
+def _fill(tpl: str, p, lang: str) -> str:
+    when = format_dates(p.start_date, p.end_date, lang)
+    for k, v in (("program_name", quoted(p.name)), ("place", p.place or ""), ("date", when)):
+        tpl = tpl.replace("${" + k + "}", v).replace("{" + k + "}", v)
+    return tpl.replace(", —", " —").replace(", .", ".").rstrip(", ")
 
 
 async def _text(session: AsyncSession, key: str, lang: str) -> str:
     return ((await get_setting(session, f"{key}_en")) if lang == "en" else None) or await get_setting(session, key)
 
 
-async def after_answer(session: AsyncSession, r, question: str, qtype: str) -> list[str]:
-    """Extra bubbles after a program-related answer: the district question, or a nearby program for a known district."""
+async def after_answer(session: AsyncSession, r, question: str, qtype: str, answer: str = "") -> list[str]:
+    """Extra bubbles after a program-related answer: the district question, or a nearby program for a known district
+    (one the answer did not already name)."""
     conv, p = r.conversation, r.profile
     if not await get_setting(session, "program_followup_enabled") or conv.district_asked_at is not None or p.erased_at:
         return []
@@ -70,7 +82,7 @@ async def after_answer(session: AsyncSession, r, question: str, qtype: str) -> l
     conv.district_asked_at = datetime.now(timezone.utc)  # once per conversation, whichever of the two it is
     if known:
         districts = find_districts(known)
-        hint = await _suggestions(session, districts[0], lang) if districts else None
+        hint = await _suggestions(session, districts[0], lang, answer) if districts else None
         if hint:
             r.events.append(f"nearby program suggested for the known district {districts[0]}")
             return [hint]

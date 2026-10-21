@@ -38,7 +38,7 @@ from app.services.reply_split import split_reply
 from app.services.reply_engine import generate_reply, get_llm_service
 from app.services.router import RouterDecision, route_intent
 from app.services.tools import resolve_pending
-from app.services.language import learn_preference, localized
+from app.services.language import detect_in_conversation, learn_preference, localized
 from app.services.settings_service import get_setting
 
 logger = logging.getLogger(__name__)
@@ -274,7 +274,7 @@ async def _respond(session: AsyncSession, r: Resolved, msg: IncomingMessage, llm
         await session.commit()
         return False
 
-    # 5') name / phone first: ask once (holding the question), or save the details the guest just sent
+    # 5') name / phone: asked once after the answer, or saved from the details the guest just sent
     ask, question = await lead_svc.before_answer(session, llm or get_llm_service(session), r, question)
     if ask:
         r.debug = {"path": "lead", "steps": []}
@@ -333,16 +333,16 @@ async def _respond(session: AsyncSession, r: Resolved, msg: IncomingMessage, llm
     # reply style for this question type, then the program follow-up bubble (each only where it applies)
     r.qtype = classify(question, reply.path, reply.debug)
     text, extra, rule = await apply_style(session, r.qtype, question, reply.text)
-    r.followups += extra + await program_followup.after_answer(session, r, question, r.qtype)
+    r.followups += extra + await program_followup.after_answer(session, r, question, r.qtype, text)
     if reply.path == "payment_disabled" and not r.conversation.ai_paused:
         # Payment questions are not answered by AI. Put the chat in the existing human handover queue so a staff
         # member can take ownership and respond in the customer's channel.
         await pause_ai(session, r.conversation, "payment_request")
-        text = await localized(session, "handover_ack", question)
+        text = await localized(session, "handover_ack", question, await _lang(session, r, question))
         r.events.append("payment question: handed over to human agent")
     if rule == "auto" and not r.conversation.ai_paused:
         await pause_ai(session, r.conversation, f"style:{r.qtype}")
-        r.followups.append(await localized(session, "handover_ack", question))
+        r.followups.append(await localized(session, "handover_ack", question, await _lang(session, r, question)))
         r.events.append(f"reply style for {r.qtype}: handed over")
     r.debug["inspector"] = await _inspect(session, r, question, text, r.debug)
     sources = {**(reply.sources or {}), "inspector": r.debug["inspector"]}
@@ -391,7 +391,7 @@ async def _per_message_checks(session: AsyncSession, r: Resolved, msg: IncomingM
         if fresh and consent_svc.classify_consent_reply(msg.text or "") == "yes":
             await consent_svc.erase_profile(session, r.profile.id)
             await session.commit()
-            await _say(session, r, await localized(session, "erasure_ack", msg.text))
+            await _say(session, r, await localized(session, "erasure_ack", msg.text, await _lang(session, r, msg.text)))
             await session.commit()
             r.events.append("data erased after confirmation")
             return True
@@ -401,7 +401,7 @@ async def _per_message_checks(session: AsyncSession, r: Resolved, msg: IncomingM
     if msg.text and consent_svc.is_erasure_request(msg.text):
         await consent_svc.erase_profile(session, r.profile.id)
         await session.commit()
-        await _say(session, r, await localized(session, "erasure_ack", msg.text))
+        await _say(session, r, await localized(session, "erasure_ack", msg.text, await _lang(session, r, msg.text)))
         await session.commit()
         return True
 
@@ -424,7 +424,7 @@ async def _per_message_checks(session: AsyncSession, r: Resolved, msg: IncomingM
             await pause_ai(session, r.conversation, f"keyword:{kw}")
             await session.commit()
             r.debug = {"path": "handover", "steps": [f"handover keyword: {kw}"]}
-            ack, extra, _ = await apply_style(session, "handover", msg.text, await localized(session, "handover_ack", msg.text))
+            ack, extra, _ = await apply_style(session, "handover", msg.text, await localized(session, "handover_ack", msg.text, await _lang(session, r, msg.text)))
             r.followups += extra
             await _say(session, r, ack, sources={"path": "handover"})
             await session.commit()
@@ -439,6 +439,12 @@ async def _free_answer_exists(session: AsyncSession, question: str) -> bool:
     if qa is not None:
         return True
     return match_variable(question, list((await session.execute(select(Variable))).scalars())) is not None
+
+
+async def _lang(session: AsyncSession, r: Resolved, text: str | None) -> str:
+    """A canned reply's language: the message's own when it says enough ("YES", "agent" do not), else the language the
+    guest has been writing in; Bangla by default."""
+    return detect_in_conversation(text or "", await _recent_history(session, r))
 
 
 async def _recent_history(session: AsyncSession, r: Resolved, *, skip_user_turns: int = 1) -> list[tuple[str, str]]:

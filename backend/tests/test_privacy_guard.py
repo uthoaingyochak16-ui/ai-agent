@@ -207,3 +207,9 @@ def test_business_content_is_not_mangled_by_the_customers_name():
 async def test_default_merge_policy_protects_other_customers(session):
     from app.services.settings_service import get_setting
     assert await get_setting(session, "merge_policy") == "suggest"
+
+
+def test_a_list_number_after_a_phone_on_the_next_line_is_not_a_foreign_number():
+    from app.privacy.guard import _contacts_in
+    _, phones = _contacts_in("ফোন: +৮৮ ০১৩২৯ ৭৪৬৭২৪\n২. লামা অফিস")
+    assert phones == {"8801329746724"}

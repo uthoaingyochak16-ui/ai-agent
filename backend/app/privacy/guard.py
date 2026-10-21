@@ -212,7 +212,10 @@ def _ngrams(text: str, n: int) -> set[tuple[str, ...]]:
 def _contacts_in(text: str) -> tuple[set[str], set[str]]:
     norm = ascii_digits(text)
     emails = {m.group().lower() for m in EMAIL_RE.finditer(norm)}
-    phones = {digits_only(m.group()) for m in PHONE_CAND_RE.finditer(norm) if 8 <= len(digits_only(m.group())) <= 15}
+    # line by line: a number never runs over a line break, and a reply's "…৭৪৬৭২৪\n২. next office" must not read as
+    # one 14-digit number that is in no knowledge (the whole answer would be replaced by the raw knowledge text)
+    phones = {digits_only(m.group()) for line in norm.splitlines() for m in PHONE_CAND_RE.finditer(line)
+              if 8 <= len(digits_only(m.group())) <= 15}
     return emails, phones
 
 

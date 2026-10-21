@@ -102,14 +102,20 @@ async def test_a_known_location_is_never_asked_again(session, progs):
     assert len(await bot(session)) == 2                                           # small talk + the answer, nothing else
 
 
+def assert_nearby(reply: str) -> None:
+    """The one Rajshahi program, in the template: its name in quotes, its dates and place filled in."""
+    head = DEFAULTS["program_nearby_reply"].split("{program_name}")[0]
+    assert reply.startswith(head + '"Yoga Orientation Rajshahi"')
+    assert "রাজশাহী সেন্টার, রাজশাহী।" in reply and "{" not in reply
+
+
 async def test_a_known_district_with_a_verified_program_gets_the_suggestion(session, progs):
     await send(session, progs, "kemon achen?", "s0")
     p = await the_profile(session)
     p.location, p.consent_given = "রাজশাহী", True
     await session.commit()
     await send(session, progs, "মেডিটেশন কোর্স কবে?", "s1")
-    assert (await bot(session))[-1] == DEFAULTS["program_nearby_reply"].replace("{program_name}", '"Yoga Orientation Rajshahi"') \
-        .replace("{place}", "রাজশাহী সেন্টার, রাজশাহী")
+    assert_nearby((await bot(session))[-1])
 
 
 async def test_a_district_answer_saves_the_location_and_suggests_only_a_verified_program(session, progs):
@@ -118,8 +124,7 @@ async def test_a_district_answer_saves_the_location_and_suggests_only_a_verified
     p.consent_given = True
     await session.commit()
     await send(session, progs, "ami Rajshahi te thaki", "d2")
-    assert (await bot(session))[-1] == DEFAULTS["program_nearby_reply"].replace("{program_name}", '"Yoga Orientation Rajshahi"') \
-        .replace("{place}", "রাজশাহী সেন্টার, রাজশাহী")
+    assert_nearby((await bot(session))[-1])
     assert (await the_profile(session)).location == "রাজশাহী"
 
 
@@ -214,3 +219,20 @@ async def test_customer_replies_store_the_inspector_for_the_inbox(session, maker
     await handle_message(session, mk_msg(uid="real-guest", text=q, mid="c1"), llm=LLMService(maker, FakeLLM()))
     m = (await session.execute(select(Message).where(Message.role == "assistant"))).scalars().first()
     assert m.sources_json["inspector"]["path_group"] == "Q&A" and m.sources_json["inspector"]["why"]
+
+
+async def test_several_nearby_programs_are_one_list_without_those_the_answer_named(session):
+    from datetime import timedelta
+    from app.models import Program
+    from app.rag.programs import today_bd
+    from app.services.program_followup import _suggestions
+    day = today_bd() + timedelta(days=3)
+    for name in ("Songhayon", "Mukto Alochona", "Yoga Orientation"):
+        session.add(Program(name=name, start_date=day, place="কাকরাইল, ঢাকা"))
+    await session.commit()
+    from app.rag.districts import find_districts
+    text = await _suggestions(session, find_districts("ঢাকা")[0], "bn", skip_text='"Songhayon" হবে ২১ অক্টোবর')
+    lines = text.split("\n")
+    assert lines[0] == "আপনার জেলায় সামনে আমাদের এই আয়োজনগুলো আছে:"
+    assert [x.split(" — ")[0] for x in lines[1:]] == ['• "Mukto Alochona"', '• "Yoga Orientation"']
+    assert "ঢাকা-এ" not in text and all(x.endswith("কাকরাইল, ঢাকা") for x in lines[1:])

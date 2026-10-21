@@ -13,7 +13,9 @@ _maker: async_sessionmaker[AsyncSession] | None = None
 def get_engine():
     global _engine
     if _engine is None:
-        _engine = create_async_engine(get_settings().database_url, pool_pre_ping=True, pool_size=10, max_overflow=10)
+        s = get_settings()
+        _engine = create_async_engine(s.database_url, pool_pre_ping=True, pool_size=s.db_pool_size,
+                                      max_overflow=s.db_max_overflow)
     return _engine
 
 
