@@ -25,9 +25,9 @@ def _fill(key, fs):
     return DEFAULTS[key].replace("{fields}", names).replace("{example}", ", ".join(_EX[f] for f in fs))
 
 
-ASK = _fill("lead_prompt", ["name", "phone"])
 EXPLAIN = _fill("lead_explain", ["name", "phone"])
 ASK_WORDS = DEFAULTS["lead_prompt"][:25]
+ANSWER = "The meditation course runs for four days."
 
 
 def extraction(reply: dict):
@@ -70,33 +70,46 @@ async def profile(session) -> Profile:
     return p
 
 
-async def test_asks_first_then_answers_the_held_question(session, env):
-    fake, llm = await env({"name": "Rahim", "location": "Mirpur, Dhaka"})
-    r = await send(session, llm, "meditation course koto din?", "a1")
-    assert await bot(session) == [ASK]                                         # why + name and phone only
-    assert "small" not in fake.models()
-    conv = await session.get(Conversation, r.conversation.id)
-    assert conv.lead_pending_question == "meditation course koto din?"
+async def asked(session, llm, text, mid, uid="test:lead"):
+    """The guest's message, then the details are asked for in the flow (as create_lead does when they want to join)."""
+    r = await send(session, llm, text, mid, uid)
+    lead_svc.mark_asked(await session.get(Profile, r.profile.id), await session.get(Conversation, r.conversation.id))
+    await session.commit()
+    return r
 
+
+async def test_never_asks_on_its_own(session, env):
+    _, llm = await env()
+    await send(session, llm, "hi", "c1")
+    for i, q in enumerate(("meditation course koto din?", "How long is the meditation course?", "course fee?")):
+        r = await send(session, llm, q, f"c2{i}")
+        assert (await bot(session))[-1] == ANSWER                             # just the answer: the chat stays on topic
+    conv = await session.get(Conversation, r.conversation.id)
+    assert conv.lead_awaiting_at is None and conv.lead_pending_question is None
+    assert (await profile(session)).personal_info_request_status == "not_asked"
+
+
+async def test_details_given_after_a_request_are_saved_once(session, env):
+    fake, llm = await env({"name": "Rahim", "location": "Mirpur, Dhaka"})
+    await asked(session, llm, "meditation course e bhorti hote chai", "a1")
     await send(session, llm, "Rahim, 01712345678, Mirpur Dhaka", "a2")
     reply = (await bot(session))[-1]
-    assert reply.startswith(DEFAULTS["lead_thanks"]) and "four days" in reply  # thanks + the held question's answer
-    assert reply.endswith(DEFAULTS["lead_anything_else"])                      # complete: anything else?
+    assert reply == DEFAULTS["lead_complete"]                                  # thanks + anything else?
     p = await profile(session)
     assert (p.name, p.location, C.get_phone(p), p.consent_given) == ("Rahim", "Mirpur, Dhaka", "+8801712345678", True)
     assert p.personal_info_request_status == "provided"
     assert "সংরক্ষণ করতে পারি" not in reply                                   # no separate consent question
 
     await send(session, llm, "registration kothay?", "a3")
-    assert ASK_WORDS not in (await bot(session))[-1]                           # never asked again
+    assert (await bot(session))[-1] == ANSWER                                  # never asked again
 
 
 async def test_partial_details_get_no_reminder(session, env):
     fake, llm = await env({"name": "Karim", "location": None})
-    await send(session, llm, "meditation course koto din?", "b1")
+    await asked(session, llm, "meditation course koto din?", "b1")
     await send(session, llm, "amar nam Karim", "b2")
     reply = (await bot(session))[-1]
-    assert reply.startswith(DEFAULTS["lead_thanks"]) and "four days" in reply and ASK_WORDS not in reply
+    assert reply == DEFAULTS["lead_thanks"] and ASK_WORDS not in reply
     p = await profile(session)
     assert p.name == "Karim" and p.personal_info_request_status == "provided"
     fake.script["ext"] = extraction({"name": None, "location": None})
@@ -105,18 +118,9 @@ async def test_partial_details_get_no_reminder(session, env):
         assert "ফোন নম্বর" not in (await bot(session))[-1]                     # the phone is never nagged for
 
 
-async def test_greeting_is_not_a_meaningful_conversation_yet(session, env):
-    _, llm = await env()
-    await send(session, llm, "hi", "c1")
-    assert await bot(session) == [DEFAULTS["greeting_first_reply"]]            # no request on a bare greeting
-    assert (await profile(session)).personal_info_request_status == "not_asked"
-    await send(session, llm, "meditation course koto din?", "c2")
-    assert (await bot(session))[-1] == ASK                                      # asked with the first real question
-
-
 async def test_ignored_request_answers_anyway_and_never_reminds(session, env):
     _, llm = await env()
-    await send(session, llm, "meditation course ki?", "d1")
+    await asked(session, llm, "meditation course ki?", "d1")
     await send(session, llm, "koto din chole?", "d2")
     reply = (await bot(session))[-1]
     assert "four days" in reply and ASK_WORDS not in reply
@@ -126,18 +130,11 @@ async def test_ignored_request_answers_anyway_and_never_reminds(session, env):
 
 async def test_refusal_is_accepted_politely(session, env):
     _, llm = await env({"name": None, "location": None, "reply": "refused"})
-    await send(session, llm, "meditation course koto din?", "x1")
+    await asked(session, llm, "meditation course koto din?", "x1")
     await send(session, llm, "na, dite chai na", "x2")
     reply = (await bot(session))[-1]
-    assert reply.startswith(DEFAULTS["lead_declined_ack"]) and "four days" in reply
+    assert reply == DEFAULTS["lead_declined_ack"]
     assert (await profile(session)).personal_info_request_status == "declined"
-
-
-async def test_english_guest_is_asked_in_english(session, env):
-    _, llm = await env()
-    await send(session, llm, "How long is the meditation course?", "h1")
-    assert await bot(session) == [DEFAULTS["lead_prompt_en"].replace("{fields}", "name and phone number")
-                                  .replace("{example}", "Rahim Uddin, 01XXXXXXXXX")]
 
 
 async def test_details_already_known_are_not_asked(session, env):
@@ -149,12 +146,11 @@ async def test_details_already_known_are_not_asked(session, env):
     await session.commit()
     await send(session, llm, "meditation course koto din?", "e1", uid="test:known")
     assert "four days" in (await bot(session))[-1]
-    assert (await profile(session)).personal_info_request_status == "provided"
 
 
 async def test_without_an_extraction_route_a_comma_list_still_works(session, env):
     _, llm = await env(extraction_route=False)
-    await send(session, llm, "meditation course?", "f1")
+    await asked(session, llm, "meditation course?", "f1")
     await send(session, llm, "Salma, 01812345678, Uttara", "f2")
     p = await profile(session)
     assert (p.name, p.location, C.get_phone(p)) == ("Salma", "Uttara", "+8801812345678")
@@ -170,14 +166,14 @@ async def test_off_by_default(session, env):
 
 async def test_phone_without_country_code_is_saved_too(session, env):
     _, llm = await env({"name": None, "location": None})
-    await send(session, llm, "meditation course koto din?", "r1")
+    await asked(session, llm, "meditation course koto din?", "r1")
     await send(session, llm, "০১৮১২৩৪৫৬৭৯", "r2")                              # Bangla digits, no country code
     assert C.get_phone(await profile(session)) == "+8801812345679"
 
 
 async def test_a_phone_that_passes_the_card_checksum_is_still_saved(session, env):
     _, llm = await env({"name": "Uthoaingyo Chak", "location": None})
-    await send(session, llm, "meditation course koto din?", "p1")
+    await asked(session, llm, "meditation course koto din?", "p1")
     await send(session, llm, "01812345604,CUET", "p2")                        # +8801812345604: 13 digits, Luhn-valid
     assert C.get_phone(await profile(session)) == "+8801812345604"
 
@@ -188,7 +184,7 @@ async def test_a_phone_already_on_another_profile_still_counts_as_given(session,
     other = await profile(session)
     C.set_phone(other, "+8801712345678")
     await session.commit()
-    await send(session, llm, "meditation course koto din?", "s1", uid="test:new")
+    await asked(session, llm, "meditation course koto din?", "s1", uid="test:new")
     await send(session, llm, "Tanvir, 01712345678, Mirpur", "s2", uid="test:new")   # merge suggested, not saved here
     assert (await bot(session))[-1].endswith(DEFAULTS["lead_anything_else"])
 
@@ -203,7 +199,7 @@ def test_asks_about_data():
 
 async def test_never_says_saved_but_answers_when_asked(session, env):
     fake, llm = await env({"name": "Rahim", "location": "Mirpur, Dhaka", "reply": "details"})
-    await send(session, llm, "meditation course koto din?", "t1")
+    await asked(session, llm, "meditation course koto din?", "t1")
     await send(session, llm, "Rahim, 01712345678, Mirpur Dhaka", "t2")
     for text in await bot(session):
         assert "সংরক্ষণ" not in text and "saved" not in text.lower()
@@ -213,18 +209,17 @@ async def test_never_says_saved_but_answers_when_asked(session, env):
 
 async def test_confused_guest_gets_the_reason_once(session, env):
     fake, llm = await env({"name": None, "location": None, "reply": "confused"})
-    await send(session, llm, "meditation course koto din?", "u1")
+    await asked(session, llm, "meditation course koto din?", "u1")
     await send(session, llm, "ki likhbo bujhi nai", "u2")
-    assert (await bot(session))[-1] == EXPLAIN
-    assert "small" not in fake.models()                                       # nothing answered yet: still waiting
+    assert (await bot(session))[-1] == EXPLAIN                                # why, once; still waiting
     await send(session, llm, "keno lagbe bujhlam na", "u3")                   # confused again: no second explanation
-    assert "four days" in (await bot(session))[-1]
+    assert (await bot(session))[-1] == DEFAULTS["lead_declined_ack"]           # the question was answered already
     assert (await profile(session)).personal_info_request_status == "deferred"
 
 
 async def test_asking_why_while_we_wait_says_yes_and_asks_again(session, env):
     fake, llm = await env({"name": None, "location": None, "reply": "other"})
-    await send(session, llm, "meditation course koto din?", "v1")
+    await asked(session, llm, "meditation course koto din?", "v1")
     await send(session, llm, "keno amar tottho lagbe?", "v2")
     assert (await bot(session))[-2:] == [DEFAULTS["data_saving_reply"], EXPLAIN]  # long: 2 messages
 
@@ -252,6 +247,6 @@ def test_fallback_does_not_mistake_a_sentence_for_a_name(text):
 
 async def test_a_clearly_labelled_value_fills_what_the_ai_missed(session, env):
     _, llm = await env({"name": None, "location": "Mirpur", "reply": "details"})   # the AI drops the name
-    await send(session, llm, "meditation course koto din?", "w1")
+    await asked(session, llm, "meditation course koto din?", "w1")
     await send(session, llm, "নাম: করিম হাসান, ফোন: 01812345679, Mirpur", "w2")
     assert (await profile(session)).name == "করিম হাসান"

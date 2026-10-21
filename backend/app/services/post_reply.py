@@ -39,8 +39,12 @@ aunt, cousin, child. A detail of a relative (their problem, illness, class, scho
 blood_group as A+, A-, B+, B-, AB+, AB-, O+ or O-. Values: short, in the user's language. "family": [] when none.
 OTHER PEOPLE AND ORGANISATIONS ARE NOT THE USER: a friend, colleague, doctor, teacher, our staff, our office or
 branches, a company, shop, hospital or school as an institution. Never put their names, ages, addresses or details in
-the user's fields or in "family"; leave them out. "location" is where the USER lives, not a place they visit, work at
-or ask about ("Mirpur branch e jabo" is not their location)."""
+the user's fields or in "family"; leave them out. "location" is where the USER lives or is staying now, not a place
+they visit, work at or ask about ("Mirpur branch e jabo", "Dhakai course ache?" are not their location). When they say
+they live, stay or have moved somewhere ("ami ekhon Sylhet e thaki", "Chattogram e shift hoyechi", "Mirpur theke
+bolchi"), that is their location even if it differs from before: return the NEW place. A bare place name that answers
+or corrects the assistant's question or remark about where they live / their district / a program near them is their
+location too."""
 
 PIECES_RULES = """
 The input has EARLIER messages and the LAST ASSISTANT message for context only, then the NEW message split into

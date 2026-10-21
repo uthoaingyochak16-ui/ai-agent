@@ -1,8 +1,9 @@
-"""Guest details: full name and phone number, asked ONCE per guest (one guest = one profile, on every channel).
+"""Guest details: full name and phone number (one guest = one profile, on every channel).
 
-- First meaningful message of a guest whose profile lacks them (a bare "hi" / small talk does not count): say why
-  ("to stay in touch and help when needed"), ask, and hold the question; it is answered right after the reply,
-  whatever the reply is. Details already on the profile (from any earlier chat or channel) are never asked for.
+- Never asked on the bot's own initiative: the conversation goes where the guest takes it. Details are asked for only
+  when the flow needs them: the guest wants to join / be contacted (services/tools.py create_lead, which asks once
+  and calls mark_asked) or asks whether we keep their data (data_answer). Details already on the profile (from any
+  earlier chat or channel) are never asked for.
 - The reply: phone by pattern (identity.handle_shared_contacts already saw it), name (and a location, if they add
   one) by the "extraction" route, or a comma split when no route is set. Sharing details after being told why counts
   as consent to save them.
@@ -19,17 +20,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.llm.service import LLMUnavailable
-from app.models import ProfileFact
+from app.models import Message, ProfileFact
 from app.privacy.guard import PrivacyGuard
 from app.privacy.patterns import PHONE_CAND_RE, ascii_digits
-from app.privacy.redaction import redact_for_storage
 from app.services import consent as consent_svc
 from app.services.contacts import extract_phones
-from app.services.greeting import is_greeting
 from app.services.language import detect, localized
 from app.services.post_reply import parse_json_object
 from app.services.settings_service import get_setting
-from app.services.smalltalk import smalltalk_reply
 
 FIELDS = ("name", "phone")  # what is asked for; a location the guest adds is saved too
 _LABELS = {"bn": {"name": "নাম", "phone": "ফোন নম্বর", "location": "ঠিকানা"},
@@ -218,12 +216,27 @@ async def capture(session: AsyncSession, llm, r, text: str) -> tuple[list[str], 
     return saved, "details"
 
 
+def mark_asked(p, conv) -> None:
+    """The conversation asked for the details just now (a tool's reply): the guest's next message is read for them."""
+    if p.personal_info_request_status == "not_asked":
+        p.personal_info_request_status = "asked"
+    p.lead_asks = max(p.lead_asks, 1)
+    conv.lead_awaiting_at = datetime.now(timezone.utc)
+
+
 async def before_answer(session: AsyncSession, llm, r, question: str) -> tuple[str | None, str]:
-    """Runs before every AI answer. Returns (text to send INSTEAD of answering, question to answer).
-    May set r.reply_prefix / r.reply_suffix, which the next reply carries."""
+    """Runs before every AI answer. Only acts while a request for details is open (asked last turn).
+    Returns (text to send INSTEAD of answering, question to answer). May set r.reply_prefix / r.reply_suffix."""
     if not await get_setting(session, "lead_capture_enabled"):
         return None, question
     return await _before_answer(session, llm, r, question)
+
+
+async def _previous_question(session: AsyncSession, conv) -> str | None:
+    """The guest's message before this one (the question that was answered when the details were asked for)."""
+    rows = (await session.execute(select(Message.content_redacted).where(
+        Message.conversation_id == conv.id, Message.role == "user").order_by(Message.id.desc()).limit(2))).scalars().all()
+    return rows[1] if len(rows) > 1 else None
 
 
 async def _before_answer(session: AsyncSession, llm, r, question: str) -> tuple[str | None, str]:
@@ -235,7 +248,8 @@ async def _before_answer(session: AsyncSession, llm, r, question: str) -> tuple[
         saved, kind = await capture(session, llm, r, question)
         r.events.append(f"lead details saved: {', '.join(saved)}" if saved else f"lead details not given ({kind or 'unknown'})")
         still = await missing(session, p)
-        said = held or question  # "Rahim, 017..., Dhaka" has no language of its own: follow the guest's question
+        # "Rahim, 017..., Dhaka" has no language of its own: follow the question the guest asked before it
+        said = held or await _previous_question(session, conv) or question
         if not saved and still and kind == "confused" and p.lead_asks < 2:  # "keno?": say why once, keep waiting
             p.lead_asks = 2
             conv.lead_awaiting_at, conv.lead_pending_question = datetime.now(timezone.utc), held
@@ -259,7 +273,7 @@ async def _before_answer(session: AsyncSession, llm, r, question: str) -> tuple[
         # not given: never asked again in this or any later conversation (only a real action may ask, once)
         p.personal_info_request_status = "declined" if kind == "refused" else "deferred"
         r.events.append(f"personal info {p.personal_info_request_status}")
-        if kind == "refused":
+        if kind in ("refused", "confused"):  # "na" / "keno lagbe?" again: fine, nothing more is asked
             ack = await localized(session, "lead_declined_ack", said)
             if held:
                 r.reply_prefix = ack
@@ -267,19 +281,5 @@ async def _before_answer(session: AsyncSession, llm, r, question: str) -> tuple[
             return ack, question
         return None, "\n".join(x for x in (held, question) if x)  # ignored the request: answer what they asked
 
-    if p.personal_info_request_status != "not_asked" or p.lead_asks > 0 or p.erased_at:
-        return None, question
-    still = await missing(session, p)
-    if not still:  # one guest = one profile: details from an earlier chat / another channel count
-        p.personal_info_request_status = "provided"
-        return None, question
-    if is_greeting(question, list(await get_setting(session, "greeting_words") or [])) \
-            or await smalltalk_reply(session, question):
-        return None, question  # "hi" / "thanks" is not a meaningful conversation yet: ask with the first real one
-    p.lead_asks = 1
-    p.personal_info_request_status = "asked"
-    conv.lead_awaiting_at = datetime.now(timezone.utc)
-    r.events.append(f"lead details asked: {', '.join(still)}")
-    ask = await _text(session, "lead_prompt", still, question)
-    conv.lead_pending_question = redact_for_storage(question)[:2000]
-    return ask, question
+    # nothing was asked: never start a request of our own (it would pull the chat away from what the guest is on)
+    return None, question

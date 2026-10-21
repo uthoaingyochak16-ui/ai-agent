@@ -13,7 +13,7 @@ from app.rag.programs import context_line, today_bd
 from app.services import leads, main_app
 from app.services import consent as consent_svc
 
-from tests.test_admin_api2 import admin  # noqa: F401,E402 - fixture
+from tests.test_admin_api2 import admin, agent  # noqa: F401,E402 - fixtures
 
 API = "http://main-app.test"
 
@@ -67,41 +67,62 @@ async def _guest(session, *, phone=None, name="Rahim"):
 
 
 @respx.mock
-async def test_a_lead_waits_for_a_phone_number_then_reaches_the_main_app(session, connected):
+async def test_the_ai_only_adds_to_the_list_and_staff_send_it(session, connected):
     sent = respx.post(f"{API}/api/partner/v1/leads").mock(return_value=httpx.Response(201, json={"guest_id": "g1", "task_id": "t1"}))
-    p = await _guest(session)
+    p = await _guest(session, phone="01712345678")
     lead = await leads.record(session, p, None, interest="Quantum Method course", note="asked about Dhaka batch")
-    assert lead.status == "pending" and "phone" in lead.error and not sent.called
-    await consent_svc.apply_field(session, p, "phone", "01712345678", consent_checked=True)
-    await session.commit()
-    assert await leads.send_pending(session) == 1
+    assert lead.status == "new" and not sent.called                         # nothing leaves on its own
+    await leads.send(session, lead)
     body = json.loads(sent.calls[0].request.content)
-    assert body["full_name"] == "Rahim" and body["mobile"].endswith("1712345678") and "Quantum Method course" in body["note"]
-    lead = (await session.execute(select(Lead))).scalar_one()
+    assert body["full_name"] == "Rahim" and body["mobile"].endswith("1712345678") and "Dhaka batch" in body["note"]
     assert (lead.status, lead.main_app_task_id) == ("sent", "t1")
-    # the same interest again soon: the same lead, not a second task in the main app
-    again = await leads.record(session, p, None, interest="Quantum Method course")
-    assert again.id == lead.id and sent.call_count == 1
+    again = await leads.record(session, p, None, interest="Quantum Method course")   # same interest: same lead
+    assert again.id == lead.id and again.status == "sent"
+    with pytest.raises(leads.CannotSend):
+        await leads.send(session, again)                                     # never a second task
+
+
+async def test_a_lead_without_a_phone_cannot_be_sent(session, connected):
+    p = await _guest(session)
+    lead = await leads.record(session, p, None, interest="Yoga orientation")
+    with pytest.raises(leads.CannotSend, match="phone"):
+        await leads.send(session, lead)
+    assert lead.status == "new"
 
 
 @respx.mock
-async def test_an_unreachable_main_app_keeps_the_lead_pending(session, connected):
-    respx.post(f"{API}/api/partner/v1/leads").mock(side_effect=httpx.ConnectError("down"))
+async def test_an_unreachable_main_app_marks_it_failed_and_it_can_go_again(session, connected):
+    route = respx.post(f"{API}/api/partner/v1/leads").mock(side_effect=httpx.ConnectError("down"))
     p = await _guest(session, phone="01712345678")
     lead = await leads.record(session, p, None, interest="Yoga orientation")
-    assert lead.status == "pending" and "unreachable" in lead.error and lead.attempts == 1
+    await leads.send(session, lead)
+    assert lead.status == "failed" and "unreachable" in lead.error
+    route.mock(return_value=httpx.Response(201, json={"guest_id": "g2", "task_id": "t2"}))
+    await leads.send(session, lead)
+    assert lead.status == "sent"
 
 
-async def test_without_a_main_app_the_lead_list_still_works(session):
+async def test_without_a_main_app_leads_stay_on_the_list(session, monkeypatch):
+    monkeypatch.setattr(get_settings(), "main_app_api_url", "")   # whatever the machine's .env says
     p = await _guest(session, phone="01712345678")
     lead = await leads.record(session, p, None, interest="Sadakaion")
-    assert lead.status == "off"
+    with pytest.raises(leads.CannotSend, match="not connected"):
+        await leads.send(session, lead)
 
 
-async def test_leads_api_lists_them(client, admin, session, connected):
-    p = await _guest(session)
-    await leads.record(session, p, None, interest="Quantum Method course")
+@respx.mock
+async def test_leads_api_list_send_dismiss_restore(client, admin, agent, session, connected):
+    respx.post(f"{API}/api/partner/v1/leads").mock(return_value=httpx.Response(201, json={"guest_id": "g1", "task_id": "t1"}))
+    a = await leads.record(session, await _guest(session, phone="01712345678"), None, interest="Quantum Method course")
+    b = await leads.record(session, await _guest(session, name="Karim"), None, interest="Yoga orientation")
     await session.commit()
     r = (await client.get("/api/leads", headers=admin)).json()
-    assert r["items"][0]["guest"] == "Rahim" and r["items"][0]["status"] == "pending" and r["main_app"]["connected"]
-    assert r["counts"]["pending"] == 1
+    assert {i["guest"] for i in r["items"]} == {"Rahim", "Karim"} and r["counts"]["new"] == 2
+    assert (await client.get("/api/leads", headers=agent)).json()["items"][-1]["phone"] != r["items"][-1]["phone"]  # masked
+    res = (await client.post("/api/leads/send", headers=agent, json={"ids": [a.id, b.id]})).json()
+    assert res["sent"] == 1 and "phone" in [x for x in res["results"] if x["id"] == b.id][0]["error"]
+    assert (await client.patch(f"/api/leads/{b.id}", headers=agent, json={"status": "dismissed"})).json()["status"] == "dismissed"
+    counts = (await client.get("/api/leads", headers=admin)).json()["counts"]
+    assert (counts["sent"], counts["dismissed"], counts["new"]) == (1, 1, 0)
+    assert (await client.patch(f"/api/leads/{a.id}", headers=agent, json={"status": "dismissed"})).status_code == 409
+    assert (await client.patch(f"/api/leads/{b.id}", headers=agent, json={"status": "new"})).json()["status"] == "new"

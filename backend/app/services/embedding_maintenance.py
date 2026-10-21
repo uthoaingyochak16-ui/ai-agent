@@ -2,16 +2,18 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.llm.providers import LLMError
-from app.models import ChannelConfig, Chunk, QAPair, SemanticCache
-from app.rag.documents import bump_context_version
+from app.models import ChannelConfig, Chunk, Document, QAPair, SemanticCache
+from app.rag.documents import PENDING_NOTE, bump_context_version
 from app.rag.embeddings import embed_texts, embedding_signature
 from app.services.settings_service import get_setting, set_setting
 
+logger = logging.getLogger(__name__)
 BATCH = 64
 
 
@@ -94,3 +96,41 @@ async def reembed_all(maker: async_sessionmaker[AsyncSession]) -> dict:
                               {"status": "failed", "done": done, "total": total, "error": str(exc)[:300]})
             await session.commit()
         raise
+
+
+async def embed_pending(maker: async_sessionmaker[AsyncSession]) -> int:
+    """Pieces saved while the embedding provider was down (no version, rag/documents.py) get their vectors now, a batch
+    at a time. Stops quietly at the first failure: the next run tries again. Returns how many were embedded."""
+    done = 0
+    for model, text_col in ((Chunk, Chunk.content), (QAPair, QAPair.question)):
+        while True:
+            async with maker() as session:
+                rows = (await session.execute(select(model).where(model.embedding_version.is_(None))
+                                              .order_by(model.id).limit(BATCH))).scalars().all()
+                if not rows:
+                    break
+                try:
+                    vectors = await embed_texts(session, [getattr(row, text_col.key) for row in rows])
+                except Exception as exc:  # noqa: BLE001 - quota / outage: word search keeps working meanwhile
+                    logger.info("pending embeddings: provider unavailable, %d done this run: %s", done, exc)
+                    break
+                signature = await embedding_signature(session)
+                for row, vector in zip(rows, vectors):
+                    row.embedding, row.embedding_version = vector, signature
+                done += len(rows)
+                await session.commit()
+        if model is Chunk and await _pending(maker, Chunk):
+            break  # the provider failed midway: QAPair waits for the next run too
+    if done:
+        async with maker() as session:
+            waiting = select(Chunk.id).where(Chunk.document_id == Document.id, Chunk.embedding_version.is_(None))
+            await session.execute(update(Document).where(Document.error.like(f"{PENDING_NOTE}%"), ~waiting.exists())
+                                  .values(error=None).execution_options(synchronize_session=False))
+            await bump_context_version(session)  # answers cached before the new vectors expire
+            await session.commit()
+    return done
+
+
+async def _pending(maker: async_sessionmaker[AsyncSession], model) -> bool:
+    async with maker() as session:
+        return (await session.execute(select(model.id).where(model.embedding_version.is_(None)).limit(1))).first() is not None

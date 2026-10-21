@@ -200,7 +200,7 @@ async def test_llm_unavailable_answers_from_the_matching_text_or_degrades_to_can
     res = await ask(env, "when is the shop open on friday")       # words found in a document: quote it, short
     assert res.path == "kb_extract" and "Friday" in res.text and env.fake.calls == []
     res = await ask(env, "xyzzy plugh")                            # only a weak vector match: never quoted
-    assert res.path in ("llm_unavailable", "no_context") and "don't have" in res.text
+    assert res.path in ("llm_unavailable", "no_context") and "তথ্য নেই" in res.text  # two words: Bangla, the default
 
 
 async def test_persist_false_leaves_no_trace(env):

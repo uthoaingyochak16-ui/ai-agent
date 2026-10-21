@@ -113,6 +113,15 @@ def chunk_sections(sections: list[Section], *, target: int = 120, overlap: int =
 
 
 # ---- job --------------------------------------------------------------------------------------------
+PENDING_NOTE = "Meaning search pending"  # doc.error while some pieces wait for their vectors
+
+
+def placeholder_vector() -> list[float]:
+    """Stands in (the column is NOT NULL) until the real vector is made; never searched: its version is None."""
+    from app.models.kb import DIM
+    return [1.0] + [0.0] * (DIM - 1)
+
+
 async def bump_context_version(session: AsyncSession) -> None:
     await set_setting(session, "context_version", int(await get_setting(session, "context_version") or 1) + 1)
 
@@ -134,13 +143,20 @@ async def process_document(session: AsyncSession, doc_id: int, *, storage: FileS
         if not chunks:
             raise ValueError("no readable text found in this file")
         await session.execute(delete(Chunk).where(Chunk.document_id == doc.id))
-        vecs: list[list[float]] = []
-        for i in range(0, len(chunks), 64):
-            vecs += await embed_texts(session, [c.content for c in chunks[i:i + 64]], embedder=embedder)
         version = await embedding_signature(session, embedder=embedder)
-        for pos, (c, vec) in enumerate(zip(chunks, vecs)):
+        vecs: list[list[float]] = []
+        try:
+            for i in range(0, len(chunks), 64):
+                vecs += await embed_texts(session, [c.content for c in chunks[i:i + 64]], embedder=embedder)
+        except Exception as exc:  # noqa: BLE001 - quota / outage: the text is still saved and searchable by its words
+            logger.warning("document %s: embedding failed after %d of %d chunks: %s", doc_id, len(vecs), len(chunks), exc)
+            doc.error = (f"{PENDING_NOTE} for {len(chunks) - len(vecs)} of {len(chunks)} pieces (embedding "
+                         f"provider: {str(exc)[:160]}). Word search works now; it is completed automatically.")
+        for pos, c in enumerate(chunks):
+            # a piece without a vector waits with no version (services/embedding_maintenance.embed_pending fills it)
+            vec = vecs[pos] if pos < len(vecs) else placeholder_vector()
             session.add(Chunk(document_id=doc.id, position=pos, content=c.content, question=c.question, keywords=c.meta,
-                              page_no=c.page, embedding=vec, embedding_version=version))
+                              page_no=c.page, embedding=vec, embedding_version=version if pos < len(vecs) else None))
         doc.chunk_count, doc.status = len(chunks), "ready"
         # a newer version replaces older ones with the same title
         old = (await session.execute(select(Document.id).where(Document.title == doc.title, Document.id != doc.id,

@@ -16,6 +16,7 @@ from app.rag.keyword_index import rebuild_index
 from app.rag.keyword_search import keyword_retrieve
 from app.rag.templates import normalize_question
 from app.services import consent as C
+from app.services import lead as lead_svc
 from app.services import learning
 from app.services import tools as tools_svc
 from app.services.ingest import handle_message
@@ -92,18 +93,27 @@ async def the_profile(session) -> Profile:
     return p
 
 
+async def asked(session, llm, text, mid):
+    """The guest's message, then the details are asked for in the flow (as create_lead does when they want to join)."""
+    r = await send(session, llm, text, mid)
+    lead_svc.mark_asked(await the_profile(session), await session.get(Conversation, r.conversation.id))
+    await session.commit()
+    return r
+
+
 # ---- A. guest profile / personal data ---------------------------------------------------------------------------
-async def test_a_new_guest_is_asked_for_name_and_phone_only_once(session, guest):
+async def test_a_new_guest_is_never_asked_for_details_unprompted(session, guest):
     _, llm = await guest()
     for i, q in enumerate(("meditation course koto din?", "registration kivabe?", "course fee koto?", "ar ki ache?")):
         await send(session, llm, q, f"a{i}")
-    asks = [t for t in await bot(session) if ASK_WORDS in t]
-    assert len(asks) == 1 and "নাম ও ফোন নম্বর" in asks[0] and "ঠিকানা" not in asks[0]
+    replies = await bot(session)
+    assert all("four days" in t for t in replies) and not any(ASK_WORDS in t or "ফোন নম্বর" in t for t in replies)
+    assert (await the_profile(session)).personal_info_request_status == "not_asked"
 
 
 async def test_b_details_given_are_never_asked_again_in_a_later_conversation(session, guest):
     _, llm = await guest({"name": "Rahim", "location": None, "reply": "details"})
-    await send(session, llm, "meditation course koto din?", "b1")
+    await asked(session, llm, "meditation course koto din?", "b1")
     await send(session, llm, "Rahim, 01712345678", "b2")
     p = await the_profile(session)
     assert (p.name, C.get_phone(p), p.personal_info_request_status) == ("Rahim", "+8801712345678", "provided")
@@ -115,7 +125,7 @@ async def test_b_details_given_are_never_asked_again_in_a_later_conversation(ses
 
 async def test_c_declined_guest_is_not_asked_in_a_later_conversation(session, guest):
     _, llm = await guest({"name": None, "location": None, "reply": "refused"})
-    await send(session, llm, "meditation course koto din?", "c1")
+    await asked(session, llm, "meditation course koto din?", "c1")
     await send(session, llm, "na, dibo na", "c2")
     assert (await the_profile(session)).personal_info_request_status == "declined"
     await new_conversation(session)

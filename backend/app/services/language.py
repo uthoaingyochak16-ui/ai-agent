@@ -1,7 +1,8 @@
 """Pick ONE reply language per message, so canned replies are never "English + Bangla" at once.
 
 Bangla script -> bn. Latin script with common Banglish words ("koto", "kivabe", "ache") -> bn as well: those guests
-read Bangla. Anything else in Latin script -> en.
+read Bangla. English only for a real English request (at least three Latin words, none of them Banglish): a word or
+two ("Agent", "ok", "Chottogram", "Course fee?") tells nothing, and Bangla is the default.
 """
 from __future__ import annotations
 
@@ -23,17 +24,24 @@ _BANGLISH = {
     "thik", "kono", "shob", "sob", "ekta", "ekti", "kichu", "kisu", "lagbe", "khabar", "kortesi", "korchi",
     "kinbo", "kinte", "pabo", "paben", "jabo", "dibo", "debo", "den", "din", "deben", "ashbo", "asbo", "shikhte", "shekhay",
     "ji", "jee", "jii", "hya", "hae", "haa", "ha", "hoo", "acha", "achha",
+    "obostha", "obosta", "asen", "achi", "asi", "thaki", "thake", "bolben", "bolte", "bolo", "bolchi", "janben", "jante",
+    "dorkar", "korar", "korle", "jodi", "tahole", "kintu", "ebong", "sathe", "shathe", "jonno", "jonne", "niye",
+    "porjonto", "ekhon", "ajke", "aj", "kal", "kalke", "shuru", "shesh", "kothai", "kothae", "kemne", "naki",
+    "gulo", "gula", "gulor", "ta", "ti", "te", "ke", "amake", "amk", "apnake", "tomake", "tmi", "apnr", "amr",
+    "assalamu", "alaikum", "salam", "shukriya", "dhonyobad", "bujhlam", "bujhi", "chacchi", "chaicchi", "jabo", "ashte",
+    "aste", "parbo", "dekhte", "shunte", "ki", "kon", "konta", "koi", "jaiga", "jayga", "thikana", "basa", "bari",
 }
 _LATIN_WORD = re.compile(r"[a-zA-Z]+")
+ENGLISH_MIN_WORDS = 3  # fewer Latin words than this are not an English request
 
 
 def detect(text: str) -> str:
     if any("ঀ" <= ch <= "৿" for ch in text or ""):
         return "bn"
     words = [w.lower() for w in _LATIN_WORD.findall(text or "")]
-    if not words:
+    if len(words) < ENGLISH_MIN_WORDS or any(w in _BANGLISH for w in words):
         return "bn"
-    return "bn" if any(w in _BANGLISH for w in words) else "en"
+    return "en"
 
 
 def detect_in_conversation(text: str, history: list[tuple[str, str]]) -> str:

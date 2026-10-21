@@ -45,7 +45,7 @@ async def test_the_reply_opens_with_the_guests_own_greeting(session):
 async def test_festival_wishes_get_a_formal_wish_back(session):
     from app.services.smalltalk import smalltalk_reply
     assert (await smalltalk_reply(session, "ঈদ মোবারক!")).startswith("আপনাকেও ঈদ মোবারক")
-    assert (await smalltalk_reply(session, "Eid Mubarak!")).startswith("Eid Mubarak to you as well")   # English in, English out
+    assert (await smalltalk_reply(session, "Eid Mubarak!")).startswith("আপনাকেও ঈদ মোবারক")   # two words: Bangla, the default
     assert (await smalltalk_reply(session, "শুভ নববর্ষ")).startswith("আপনাকেও নববর্ষের")
-    assert (await smalltalk_reply(session, "salam, eid mubarak")).startswith("Eid Mubarak to you")      # greeting + wish
+    assert (await smalltalk_reply(session, "salam, eid mubarak")).startswith("আপনাকেও ঈদ মোবারক")      # greeting + wish
     assert "🙂" not in (await smalltalk_reply(session, "ok"))

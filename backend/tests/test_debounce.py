@@ -91,7 +91,7 @@ async def test_handover_and_erasure_are_seen_on_every_message_of_a_burst(maker, 
         await process_event(maker, i)
     async with maker() as s:
         assert (await s.execute(select(Conversation.ai_paused))).scalar_one() is True
-    assert DEFAULTS["handover_ack_en"] in await replies(maker)  # "agent please" is English
+    assert DEFAULTS["handover_ack"] in await replies(maker)  # "agent please" is two words: Bangla, the default
 
     ids = [await add_event(maker, "delete my data", "e1", 1.0, uid="PSID_E"),
            await add_event(maker, "fee koto?", "e2", 0.0, uid="PSID_E")]

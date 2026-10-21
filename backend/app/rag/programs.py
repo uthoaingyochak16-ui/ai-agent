@@ -169,8 +169,16 @@ def match_program_question(text: str, programs: list[Program]) -> ProgramQuestio
     if any(_canon(t) in {'next', 'porer', 'পরবর্তী', 'পরের'} for t in tokens):
         candidates = candidates[:1]
     asked_any = wants_date or wants_fee or wants_place
-    return ProgramQuestion(candidates[:MAX_PROGRAMS], wants_date or not asked_any, wants_fee or not asked_any,
+    # "kobe / kothay" not said: date and place; the fee only when asked (a free program says so anyway, _sentence)
+    return ProgramQuestion(candidates[:MAX_PROGRAMS], wants_date or not asked_any, wants_fee,
                            wants_place or not asked_any, generic=not named)
+
+
+_FREE = {"free", "0", "0 tk", "0 taka", "ফ্রি", "বিনামূল্যে", "বিনা মূল্যে", "ফি নেই", "০", "০ টাকা", "free of cost"}
+
+
+def is_free(p: Program) -> bool:
+    return (p.fee or "").strip().strip(".।").lower() in _FREE
 
 
 def quoted(name: str) -> str:
@@ -189,9 +197,9 @@ def _sentence(p: Program, q: ProgramQuestion, today: date, lang: str) -> str:
     elif q.wants_place:
         parts.append((f"হবে {p.place}-এ" if bn else f"takes place at {p.place}") if p.place
                      else ("স্থান এখনো জানানো হয়নি" if bn else "venue not announced yet"))
-    if q.wants_fee:
+    free = is_free(p)
+    if q.wants_fee or free:  # the fee only when asked; "free" always, it invites the guest
         fee = p.fee or ("এখনো জানানো হয়নি" if bn else "not announced yet")
-        free = (p.fee or "").strip().lower() in {"free", "0", "0 tk", "0 taka", "ফ্রি", "বিনামূল্যে"}
         fee_part = ("ফি: " if bn else "fee: ") + fee
         if free:  # a free program says so first
             parts.insert(0, fee_part)

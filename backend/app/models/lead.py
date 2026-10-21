@@ -9,8 +9,8 @@ from app.db.base import Base
 
 
 class Lead(Base):
-    """A guest who is interested in a program or in knowing more (services/leads.py). The lead list; each lead is also
-    sent to the main application (a guest + a task there) once a phone number is known."""
+    """A guest who is interested in a program or in knowing more (services/leads.py). The lead list; staff send the
+    ones they choose to the main application, where each becomes a guest + a task."""
     __tablename__ = "leads"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -20,8 +20,8 @@ class Lead(Base):
     interest: Mapped[str] = mapped_column(String(300))           # the program / service, in the guest's words
     program_id: Mapped[int | None] = mapped_column(ForeignKey("programs.id", ondelete="SET NULL"))
     note: Mapped[str | None] = mapped_column(Text)
-    # pending: waiting to be sent (no phone yet, or the main app was unreachable) | sent | off (no main app configured)
-    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    # new (on the list) | sent (staff sent it to the main app) | failed (sending failed; can be sent again) | dismissed
+    status: Mapped[str] = mapped_column(String(16), default="new", index=True)
     main_app_guest_id: Mapped[str | None] = mapped_column(String(64))
     main_app_task_id: Mapped[str | None] = mapped_column(String(64))
     attempts: Mapped[int] = mapped_column(Integer, default=0)

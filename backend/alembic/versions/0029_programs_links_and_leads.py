@@ -1,7 +1,7 @@
 """program registration links from the main application; the lead list
 
 programs: registration_url (the form a guest fills in), source + external_id (rows kept in step with the main app).
-leads: guests interested in a program or in knowing more, and whether they reached the main app as a guest + task.
+leads: guests interested in a program or in knowing more; staff send them to the main app as a guest + task.
 
 Revision ID: 0029
 Revises: 0028
@@ -30,7 +30,7 @@ def upgrade() -> None:
         sa.Column("interest", sa.String(300), nullable=False),
         sa.Column("program_id", sa.Integer, sa.ForeignKey("programs.id", ondelete="SET NULL")),
         sa.Column("note", sa.Text),
-        sa.Column("status", sa.String(16), nullable=False, server_default="pending"),
+        sa.Column("status", sa.String(16), nullable=False, server_default="new"),
         sa.Column("main_app_guest_id", sa.String(64)),
         sa.Column("main_app_task_id", sa.String(64)),
         sa.Column("attempts", sa.Integer, nullable=False, server_default="0"),

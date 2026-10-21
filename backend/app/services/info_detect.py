@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 
 from app.privacy.patterns import EMAIL_RE, PHONE_CAND_RE, ascii_digits
+from app.rag.districts import find_districts
 
 _E = r"(?=[\s,.?!।:;\-]|$)"  # word end that also works after Bangla vowel signs
 _B = r"(?<![a-zA-Zঀ-৿])"  # word start
@@ -23,6 +24,7 @@ _WORDS = [
     # where
     "thaki", "thake", "থাকি", "থাকে", "basa", "bashay", "বাসা", "bari", "bari te", "বাড়ি", "thikana", "ঠিকানা", "live", "living",
     "from", "theke", "থেকে", "jela", "জেলা", "district", "upazila", "উপজেলা", "gram", "গ্রাম", "village", "vill",
+    "achi", "asi", "আছি", "shift", "শিফট", "moved", "location", "লোকেশন", "area", "এলাকা", "elaka",
     # study, work
     "pori", "porhi", "porashona", "পড়ি", "পড়ি", "পড়াশোনা", "class", "ক্লাস", "শ্রেণি", "school", "স্কুল", "college", "কলেজ",
     "madrasa", "মাদ্রাসা", "versity", "varsity", "university", "বিশ্ববিদ্যালয়", "ভার্সিটি", "student", "ছাত্র", "ছাত্রী",
@@ -62,7 +64,8 @@ def split(text: str) -> list[Piece]:
         if not t or not re.search(r"\w", t):
             continue
         norm = ascii_digits(t)
-        info = bool(_INFO.search(t) or EMAIL_RE.search(norm) or PHONE_CAND_RE.search(norm))
+        # a district alone ("Chottogram", "ekhon Sylhet e") may be where the guest lives now: the AI decides
+        info = bool(_INFO.search(t) or EMAIL_RE.search(norm) or PHONE_CAND_RE.search(norm) or find_districts(t))
         out.append(Piece(t[:300], info, bool(_QUESTION.search(t))))
     return out[:20]
 
