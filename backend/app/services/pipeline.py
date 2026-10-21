@@ -130,10 +130,38 @@ asked, and mention how many days are left when useful. Guests spell program name
 If a detail says "not listed", say it is not announced yet; a fee may still be given elsewhere in CONTEXT (a VALUE or
 Q&A line). The PROGRAM lines are the complete schedule: when none fits (no course in that city, no such event this
 month), that is the answer - say none is scheduled right now and point to the local center or the head office from
-CONTEXT if there is one; never reply NO_ANSWER for it. When the guest wants to attend or register for a program whose
-line has a registration link, give that link exactly as written (never make one up, never give another program's); a
-program without a link is joined through the office or helpline. Do not list every program unless the guest asks for a list.
-Write a program's name exactly as given."""
+CONTEXT if there is one; never reply NO_ANSWER for it. Do not list every program unless the guest asks for a list.
+Write a program's name exactly as given. The FEE AND LINK rules below say when a fee or a registration link is given."""
+
+# How a guest is led towards a program: interest first, the price only when asked, the form only when they want to join.
+# Always part of the answer prompt (whatever the admin's system prompt says), so no saved wording can override it.
+FEE_AND_LINK_RULES = """
+FEE AND LINK (these override anything above about what to add to an answer):
+- Fee: say what a program, course or service costs ONLY when the guest asks about the cost (fee, price, "koto taka",
+  "khoroch", "dam", "টাকা লাগে?" ...). Describing a program, giving its date or place, or the guest saying they want
+  to join is NOT asking the fee: leave the fee out. The one exception: a program that is free (fee "Free", "ফ্রি",
+  "বিনামূল্যে", 0) may be called free right away, as a friendly invitation.
+- Registration link / form: give a program's registration link ONLY when the guest shows they want to take part in
+  that program: they want to attend, join, register or enrol, ask how to join or sign up, ask for the form or link, or
+  answer "yes" when asked whether they would like to join. A question about the program (what it is, when, where,
+  for whom) is not that: answer it without the link; you may end with one short question asking whether they would
+  like to join. Then give the link exactly as written in its PROGRAM line (never make one up, never another
+  program's); a program without a link is joined through the office or helpline in CONTEXT."""
+# How the answer reads. The knowledge is often stored as records ("অফিস: … ধরন: সেল / cell … এলাকা: …"); copied as
+# they are, replies read like a database dump. Always part of the answer prompt, after the admin's system prompt.
+WRITING_RULES = """
+WRITING (how the reply reads):
+- Write as a polite person at the front desk: complete, natural sentences in standard spoken Bangla (চলিত ভাষা) or
+  plain English. Never copy field labels or record layout from CONTEXT ("ধরন:", "এলাকা:", "type:", "cell", "/");
+  turn them into sentences ("বান্দরবান সেলের ঠিকানা: …, ফোন: …").
+- Bangla place names take the right case ending: ঢাকায়, যশোরে, চট্টগ্রামে, কাকরাইলে - never "ঢাকা-এ", "ঢাকা তে"; after a
+  full address write "ঠিকানা: …" or "স্থান: …" instead of adding an ending to it.
+- Say each fact once. Do not repeat what you said earlier in the chat unless they ask again, and do not start two
+  sentences the same way.
+- Do not tell the guest their own details ("আপনি ঢাকায় থাকেন") unless that changes the answer.
+- When CONTEXT clearly implies the answer, say the conclusion plainly (open to everyone -> no registration is needed;
+  a fee of 0 -> it is free) instead of saying you do not have it.
+- At most one question in a reply, and only when it helps the next step."""
 # how many upcoming programs every answer prompt carries (the matched ones first)
 PROGRAM_LINES = 30
 
@@ -143,11 +171,12 @@ async def run_pipeline(session: AsyncSession, llm: LLMService, *, text: str, pro
                        history: list[tuple[str, str]] | None = None, persist: bool = True, is_test: bool = False,
                        embedder=None, knowledge_only: bool = False, combined_turns: int = 1,
                        standalone_question: str | None = None, guest_request: str | None = None,
-                       guest_language: str | None = None) -> PipelineResult:
+                       guest_language: str | None = None, extra_rules: str | None = None) -> PipelineResult:
     """combined_turns: how many trailing stored user messages make up `text` (a debounced burst); they are the
     question, so they are left out of the history. standalone_question: the intent router already rewrote a
     follow-up into a self-contained question, so the separate "rewrite" call is skipped. guest_request: the router's
-    one-line reading of what exactly the guest wants; the answering model gets it next to the guest's own words."""
+    one-line reading of what exactly the guest wants; the answering model gets it next to the guest's own words.
+    extra_rules: added to the answer prompt last (e.g. services/comments.py: a public reply under a Facebook post)."""
     t0 = time.perf_counter()
     dbg: dict = {"steps": []}
     get = lambda k: get_setting(session, k)  # noqa: E731
@@ -380,6 +409,9 @@ async def run_pipeline(session: AsyncSession, llm: LLMService, *, text: str, pro
     system_prompt += GENERAL_ANSWER_RULES if general_answer else CONTEXT_CHECK_RULES
     if program_ctx:
         system_prompt += PROGRAM_RULES.format(today=today.isoformat())
+    system_prompt += FEE_AND_LINK_RULES + WRITING_RULES
+    if extra_rules:
+        system_prompt += extra_rules
     if tone := await tone_for(session, pre_classify(retrieval_text)):  # admin's reply style for this question type
         system_prompt += f"\nTONE for this kind of question: {tone}"
     if max_chars:  # chat replies stay short; the guest can ask for more
@@ -391,6 +423,9 @@ async def run_pipeline(session: AsyncSession, llm: LLMService, *, text: str, pro
     specs = [t.spec for t in tool_list] or None
     if specs:
         system_prompt += tools_prompt(profile, view)
+        if any(t.spec.name == "search_sheet" for t in tool_list):
+            from app.services import sheets
+            system_prompt += await sheets.prompt_block(session)
     conv_summary = conversation.summary if conversation is not None else None
     consent_ok = view is not None and view.consent_state == "given"
     capture: dict = {}

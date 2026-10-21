@@ -82,7 +82,7 @@ async def test_an_interested_guest_goes_on_the_lead_list_at_once(session, env):
     assert (await bot(session))[-1] == "ধন্যবাদ! আমাদের টিম যোগাযোগ করবে।"               # no yes/no question first
     assert await logs(session) == [("create_lead", "executed")]
     lead = (await session.execute(select(Lead))).scalar_one()
-    assert lead.interest == "meditation course" and lead.status == "off"                # no main app in this test
+    assert lead.interest == "meditation course" and lead.status == "new"                # on the list; staff send it
     facts = {f.key: f.value for f in (await session.execute(select(ProfileFact))).scalars()}
     assert facts["courses_interested"] == "meditation course"
     assert "pending_phone" in facts and "01712345678" not in facts["pending_phone"]          # no consent: held encrypted
@@ -95,7 +95,10 @@ async def test_an_interested_guest_goes_on_the_lead_list_at_once(session, env):
 async def test_a_lead_without_a_phone_asks_for_one_once(session, env):
     nophone = ToolCall("c3", "create_lead", {"interest": "yoga orientation"})
     fake, llm = env([("", [nophone]), ("ফোন নম্বর দেবেন?", []), ("", [nophone]), ("ঠিক আছে", [])])
-    await send(session, llm, "yoga orientation e jete chai", "n1")
+    r = await send(session, llm, "yoga orientation e jete chai", "n1")
+    conv = await session.get(Conversation, r.conversation.id)
+    await session.refresh(conv)
+    assert conv.lead_awaiting_at is not None                    # asked in the flow: the next message is read for it
     await send(session, llm, "yoga orientation e jete chai, ar ki lagbe?", "n2")
     first, second = (json.dumps(fake.calls[i][0].messages, ensure_ascii=False) for i in (1, 3))
     assert "ask ONCE" in first and "ask ONCE" not in second

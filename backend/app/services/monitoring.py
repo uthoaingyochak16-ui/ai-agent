@@ -46,6 +46,10 @@ async def system_health(session: AsyncSession) -> dict:
         LLMCall.created_at >= day, LLMCall.status == "ok", LLMCall.is_test.is_(False)))).scalar_one_or_none()
     err_rate = (errors / calls) if calls else 0.0
     shared, asked = await _card_events(session, day)
+    from app.services.social import spike_alert
+    spike = await spike_alert(session)
+    if spike:
+        out.append(Alert("negative_comments", spike))
     b = await budget_state(session)
     emb = await embedding_status(session)
     return {

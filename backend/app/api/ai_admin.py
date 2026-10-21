@@ -74,7 +74,7 @@ SETTING_SPECS: dict[str, tuple[tuple, object]] = {
     "keyword_search_enabled": ((bool,), None), "keyword_ai_enabled": ((bool,), None),
     "keyword_ai_skip_above": ((int, float), _num(0, 1)), "keyword_min_coverage": ((int, float), _num(0.1, 1)),
     "keyword_top_k": ((int,), _num(1, 10)),
-    "tools_enabled": ((dict,), lambda v: all(k in ("create_lead", "request_callback", "current_datetime") and isinstance(x, bool) for k, x in v.items())),
+    "tools_enabled": ((dict,), lambda v: all(k in ("create_lead", "request_callback", "current_datetime", "search_knowledge", "search_sheet") and isinstance(x, bool) for k, x in v.items())),
     **{k: ((str,), lambda v: bool(v.strip())) for k in ("tool_confirm_prompt", "tool_declined_ack", "tool_lead_ack", "tool_callback_ack")},
     **{f"{k}_en": ((str,), None) for k in ("tool_confirm_prompt", "tool_declined_ack", "tool_lead_ack", "tool_callback_ack")},
     "alert_webhook_url": ((str,), lambda v: not v.strip() or v.strip().startswith("https://")),
@@ -88,9 +88,11 @@ SETTING_SPECS: dict[str, tuple[tuple, object]] = {
     "lead_thanks": ((str,), lambda v: bool(v.strip())), "lead_thanks_en": ((str,), None),
     "lead_declined_ack": ((str,), lambda v: bool(v.strip())), "lead_declined_ack_en": ((str,), None),
     "program_followup_enabled": ((bool,), None),
-    **{k: ((str,), lambda v: bool(v.strip())) for k in ("program_district_prompt", "program_nearby_none", "handover_offer")},
+    **{k: ((str,), lambda v: bool(v.strip())) for k in ("program_district_prompt", "program_nearby_none", "handover_offer",
+                                                    "program_nearby_list_intro")},
     "program_nearby_reply": ((str,), lambda v: "{program_name}" in v and "{place}" in v),
-    **{f"{k}_en": ((str,), None) for k in ("program_district_prompt", "program_nearby_reply", "program_nearby_none", "handover_offer")},
+    **{f"{k}_en": ((str,), None) for k in ("program_district_prompt", "program_nearby_reply", "program_nearby_none", "handover_offer",
+                                        "program_nearby_list_intro")},
     "reply_styles": ((dict,), _valid_styles),
     **{k: ((str,), lambda v: bool(v.strip())) for k in ("lead_complete", "lead_anything_else", "data_saving_reply")},
     **{f"{k}_en": ((str,), None) for k in ("lead_complete", "lead_anything_else", "data_saving_reply")},
@@ -107,6 +109,20 @@ SETTING_SPECS: dict[str, tuple[tuple, object]] = {
     "rerank_provider": ((str,), lambda v: v in ("none", "cohere", "local")), "rerank_model": ((str,), None),
     "rerank_candidates": ((int,), _num(1, 80)),
     "rerank_min_score": ((int, float, type(None)), lambda v: v is None or 0 <= v <= 1),
+    "comment_mode": ((str,), lambda v: v in ("off", "review", "auto")),
+    **{k: ((bool,), None) for k in ("post_approval_required", "auto_program_drafts", "auto_plan_weekly", "weekly_report_enabled")},
+    "report_language": ((str,), lambda v: v in ("bn", "en")),
+    "ads_account_id": ((str,), lambda v: len(v) <= 40 and v.replace("act_", "").strip().isdigit() or not v.strip()),
+    **{k: ((bool,), None) for k in ("comment_auto_like", "comment_reply_to_praise", "comment_private_reply")},
+    "comment_spam_action": ((str,), lambda v: v in ("ignore", "hide", "delete")),
+    "comment_against_action": ((str,), lambda v: v in ("notify", "hide", "delete")),
+    "comment_remove_min_confidence": ((int, float), _num(0, 1)),
+    "comment_reply_delay_seconds": ((int, float), _num(0, 600)), "comment_max_replies_per_hour": ((int,), _num(0, 1000)),
+    "comment_thread_max_replies": ((int,), _num(0, 10)), "comment_max_chars": ((int,), _num(80, 1000)),
+    **{k: ((str,), lambda v: bool(v.strip()) and len(v) <= 1000) for k in (
+        "comment_no_answer", "comment_thanks_reply", "comment_complaint_reply", "comment_private_reply_text")},
+    **{f"{k}_en": ((str,), lambda v: len(v) <= 1000) for k in (
+        "comment_no_answer", "comment_thanks_reply", "comment_complaint_reply", "comment_private_reply_text")},
 }
 
 

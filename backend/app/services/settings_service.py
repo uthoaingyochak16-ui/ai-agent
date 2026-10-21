@@ -28,7 +28,8 @@ DEFAULTS: dict[str, object] = {
     "consent_no_ack_en": "Okay, your details will not be saved. Let me know if you need anything else.",
     # --- tools (the assistant can act). create_lead / request_callback ask the guest to confirm first;
     # current_datetime only reads the clock (Bangladesh time), so it runs inline and is on by default.
-    "tools_enabled": {"create_lead": True, "request_callback": False, "current_datetime": True, "search_knowledge": True},
+    "tools_enabled": {"create_lead": True, "request_callback": False, "current_datetime": True, "search_knowledge": True,
+                      "search_sheet": True},
     "tool_confirm_prompt": "আমি এটি করতে চাই: {action}। ঠিক আছে? \"হ্যাঁ\" বা \"না\" লিখুন।",
     "tool_confirm_prompt_en": "I'd like to do this for you: {action}. Is that okay? Reply YES or NO.",
     "tool_declined_ack": "ঠিক আছে, কিছু করা হয়নি। আর কিছু জানতে চাইলে বলুন।",
@@ -120,8 +121,11 @@ DEFAULTS: dict[str, object] = {
     "program_followup_enabled": True,
     "program_district_prompt": "আপনি কোন জেলায় থাকেন? জানালে আপনার কাছাকাছি কোনো আয়োজন থাকলে জানাতে পারব।",
     "program_district_prompt_en": "Which district do you live in? If there is an event near you, I can let you know.",
-    "program_nearby_reply": "আপনার জেলার কাছাকাছি আমাদের {program_name} আয়োজনটি {place}-এ হবে। চাইলে আপনি সেখানে অংশ নিতে পারেন।",
-    "program_nearby_reply_en": "Near your district, our {program_name} will take place at {place}. You are welcome to join it.",
+    # {date} = the program's dates; no case ending is glued to {place} ("ঢাকা-এ" reads wrong): it stands after "স্থান:"
+    "program_nearby_reply": "আপনার জেলায় সামনে আমাদের {program_name} আয়োজন আছে — {date}, স্থান: {place}। চাইলে অংশ নিতে পারেন।",
+    "program_nearby_reply_en": "Coming up in your district: our {program_name} — {date}, at {place}. You are welcome to join.",
+    "program_nearby_list_intro": "আপনার জেলায় সামনে আমাদের এই আয়োজনগুলো আছে:",
+    "program_nearby_list_intro_en": "Coming up in your district:",
     "program_nearby_none": "আপনার কাছাকাছি কোনো নিশ্চিত আয়োজন এখন তালিকায় নেই। চাইলে আমাদের team আপনাকে পরবর্তী আয়োজন সম্পর্কে জানাতে পারে।",
     "program_nearby_none_en": "There is no confirmed event near you on the list right now. If you like, our team can let you know about the next one.",
     # --- reply style per question type (services/reply_style.py): {type: {tone, template(_en), followup(_en), handover}}
@@ -196,6 +200,35 @@ DEFAULTS: dict[str, object] = {
          "answer": "ধন্যবাদ! আর কোনো প্রশ্ন থাকলে জানাবেন।",
          "answer_en": "Thank you! Let me know if you have any other questions."},
     ],
+    # --- comments on the Facebook Page's posts (services/comments.py). off | review (the AI drafts, staff send from
+    # the Comments page; a like alone goes ahead) | auto (the AI replies and likes by itself)
+    "comment_mode": "off",
+    "comment_auto_like": True,             # like questions, thanks and emoji comments (never complaints, spam or abuse)
+    "comment_reply_to_praise": True,       # a short thank-you under praise / greetings ("Alhamdulillah", "MashaAllah")
+    "comment_spam_action": "hide",         # ads / scams / abuse: ignore | hide (can be undone) | delete (for good)
+    "comment_against_action": "notify",    # attacks on Quantum Method / Foundation: notify (staff decide) | hide | delete;
+                                           # staff are told in every case (alert webhook + "Needs staff")
+    "comment_remove_min_confidence": 0.8,  # below this the AI never hides / deletes on its own: staff check it
+    "comment_private_reply": False,        # after answering a question, also send the commenter one Messenger message
+    "comment_reply_delay_seconds": 20,     # wait a little before replying (an instant reply looks automatic)
+    "comment_max_replies_per_hour": 60,    # above this, replies wait as drafts for staff (Meta limits bursts of replies)
+    "comment_thread_max_replies": 2,       # follow-ups we answer when the commenter replies to our reply in the thread
+    "comment_max_chars": 300,
+    "comment_no_answer": "বিস্তারিত জানতে অনুগ্রহ করে আমাদের পেজে একটি মেসেজ দিন, আমরা সাহায্য করব। 🙏",
+    "comment_no_answer_en": "Please send our Page a message for the details, and we will be glad to help. 🙏",
+    "comment_thanks_reply": "আপনাকে অনেক ধন্যবাদ! 🙏",
+    "comment_thanks_reply_en": "Thank you so much! 🙏",
+    "comment_complaint_reply": "আপনার অসুবিধার জন্য আমরা আন্তরিকভাবে দুঃখিত। অনুগ্রহ করে বিস্তারিত জানিয়ে আমাদের পেজে একটি মেসেজ দিন, আমাদের টিম দ্রুত বিষয়টি দেখবে।",
+    "comment_complaint_reply_en": "We are truly sorry for the trouble. Please send our Page a message with the details, and our team will look into it quickly.",
+    "comment_private_reply_text": "আপনার কমেন্টের জন্য ধন্যবাদ! আরও কিছু জানতে চাইলে এখানে লিখুন, আমি সাহায্য করব।",
+    "comment_private_reply_text_en": "Thanks for your comment! If you'd like to know more, just write here and I'll help.",
+    # --- social posts (services/posts.py, social.py, ads.py)
+    "post_approval_required": False,       # a non-admin's scheduled / published post waits for an admin's approval
+    "auto_program_drafts": True,           # daily: an invitation + a reminder DRAFT for each upcoming program (nothing is posted)
+    "auto_plan_weekly": False,             # Saturdays: the AI's 2-week plan as drafts (AI calls cost money)
+    "weekly_report_enabled": True,         # Saturdays 09:00 Dhaka: the AI's weekly report to the alert webhook
+    "report_language": "bn",
+    "ads_account_id": "",                  # Meta ad account (read-only results); the token is saved apart, encrypted
     # --- retention: messages older than this are deleted; profiles and their saved details are kept
     "conversation_retention_days": 30,
     "context_version": 1,

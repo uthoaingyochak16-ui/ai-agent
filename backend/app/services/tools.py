@@ -42,7 +42,7 @@ TOOLS_PROMPT = """
 Tools: call create_lead when the person shows real interest in attending a program, course or event, wants to join
 or enrol, wants to know more about the organisation's work to take part, or asks to be contacted about one - not for a
 passing question. It puts them on the lead list for the team. When the program they want has a registration link in
-CONTEXT, also share that link in your reply. Call request_callback when they ask for a phone call or to talk to someone
+CONTEXT, also share that link in your reply (only then: a question about a program alone never gets the link). Call request_callback when they ask for a phone call or to talk to someone
 by phone. Details already on file are used automatically: never ask for them. Never call a tool for an ordinary question. When the answer depends on today's date, the day of
 the week or the current time (e.g. "koyta baje?", "ajke koto tarikh?", "what day is it?"), call current_datetime; never guess.
 When CONTEXT does not hold what the person asked (a particular office, a program detail, a rule), call search_knowledge
@@ -85,7 +85,7 @@ async def _staff_note(ctx: ToolContext, text: str) -> None:
 
 
 async def _create_lead(ctx: ToolContext, args: dict) -> str:
-    """The guest goes on the lead list (services/leads.py), and to the main application once a phone number is known.
+    """The guest goes on the lead list (services/leads.py); staff send it on to the main application.
     The result tells the model what to say: the lead is saved; ask for a phone number once if none is on file."""
     from app.services import leads  # local: leads -> main_app -> settings, no cycle at import time
     saved = []
@@ -98,15 +98,14 @@ async def _create_lead(ctx: ToolContext, args: dict) -> str:
                               note=args.get("note", ""))
     await _staff_note(ctx, f"New lead #{lead.id}: {lead.interest}"
                            + (f" · note: {args['note']}" if args.get("note") else "")
-                           + (f" · {', '.join(saved)}" if saved else "")
-                           + (f" · sent to the main app (task {lead.main_app_task_id})" if lead.status == "sent"
-                              else f" · {lead.error}" if lead.error else ""))
+                           + (f" · {', '.join(saved)}" if saved else "") + " · on the Leads list")
     ack = await localized(ctx.session, "tool_lead_ack", ctx.text)
-    if lead.status != "sent" and not await lead_svc.has_phone(ctx.session, ctx.profile):  # the team needs a number
+    if not await lead_svc.has_phone(ctx.session, ctx.profile):  # the team needs a number to follow up
         asked = (await ctx.session.execute(select(func.count()).select_from(ToolCallLog).where(
             ToolCallLog.conversation_id == ctx.conversation.id, ToolCallLog.tool == "create_lead"))).scalar_one()
         if not asked:  # the first lead of this chat: ask once, saying why; later leads never ask again
             optional = ctx.profile.personal_info_request_status in ("declined", "deferred")
+            lead_svc.mark_asked(ctx.profile, ctx.conversation)  # the guest's next message is read for the details
             return (f"Saved on the lead list. Tell the person, in their language: {ack} No phone number is on file: ask "
                     "ONCE for one so a team member can contact them" + (" (say it is optional)." if optional else "."))
     return f"Saved on the lead list. Tell the person, in their language: {ack}"
@@ -152,6 +151,25 @@ async def _search_knowledge(ctx: ToolContext, args: dict) -> str:
     return ("Knowledge base results:\n" + "\n---\n".join(t for t in texts if t))[:SEARCH_RESULT_CHARS]
 
 
+SHEET_ROWS = 15
+
+
+async def _search_sheet(ctx: ToolContext, args: dict) -> str:
+    """Look rows up in a data sheet (books, branches ...), or list a sheet when no words are given. Read-only."""
+    from app.services import sheets
+    sheet = await sheets.find_sheet(ctx.session, str(args.get("sheet", "")))
+    query = str(args.get("query", "")).strip()[:300]
+    if args.get("sheet") and sheet is None:
+        names = ", ".join(s["name"] for s in await sheets.overview(ctx.session) if s["active"])
+        return f"There is no sheet called '{args.get('sheet')}'. Sheets: {names or 'none'}."
+    found = await sheets.search(ctx.session, sheet, query, SHEET_ROWS)
+    if not found and sheet is not None and query:   # the words matched nothing: the sheet itself may still answer
+        found = await sheets.search(ctx.session, sheet, "", SHEET_ROWS)
+    if not found:
+        return "No rows match this search."
+    return ("Sheet rows:\n" + "\n".join(sheets.row_line(s, r.values or {}) for s, r, _ in found))[:SEARCH_RESULT_CHARS]
+
+
 _STR = {"type": "string"}
 TOOLS: dict[str, Tool] = {
     "search_knowledge": Tool(  # read-only: runs inline, no confirmation
@@ -162,6 +180,14 @@ TOOLS: dict[str, Tool] = {
                                                              "'সাদাকায়নে অংশ নিতে রেজিস্ট্রেশন'"}},
                   "required": ["query"]}),
         False, _search_knowledge, lambda a: "knowledge search"),
+    "search_sheet": Tool(  # read-only: runs inline, no confirmation
+        ToolSpec("search_sheet", "Look up rows in one of the organisation's data sheets (DATA SHEETS lists them, e.g. "
+                                 "Books): by words, or the whole sheet when query is empty.",
+                 {"type": "object", "properties": {"sheet": {**_STR, "description": "the sheet's name, e.g. 'Books'"},
+                                                   "query": {**_STR, "description": "words to find in its rows, as "
+                                                             "written in the sheet (a title, an author, a place); empty = list it"}},
+                  "required": ["sheet"]}),
+        False, _search_sheet, lambda a: "data sheet search"),
     "create_lead": Tool(
         ToolSpec("create_lead", "Put this person on the lead list: they are interested in attending a program / course "
                                 "or in knowing more, so the team follows up.",
@@ -187,11 +213,15 @@ TOOLS: dict[str, Tool] = {
 
 
 # tools that only look something up: using them is not an action the guest must be told about
-READ_ONLY_TOOLS = frozenset({"search_knowledge", "current_datetime"})
+READ_ONLY_TOOLS = frozenset({"search_knowledge", "search_sheet", "current_datetime"})
 
 
 async def enabled_tools(session: AsyncSession) -> list[Tool]:
     flags = {**DEFAULTS["tools_enabled"], **(await get_setting(session, "tools_enabled") or {})}  # new tools: their default
+    if flags.get("search_sheet"):  # nothing to search: not offered (saves the model's attention and tokens)
+        from app.models import DataRow, DataSheet
+        flags["search_sheet"] = (await session.execute(select(DataRow.id).join(DataSheet, DataRow.sheet_id == DataSheet.id)
+                                                       .where(DataSheet.active.is_(True)).limit(1))).first() is not None
     return [t for name, t in TOOLS.items() if flags.get(name)]
 
 

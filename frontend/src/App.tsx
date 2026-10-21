@@ -10,13 +10,13 @@ const Dashboard = lazy(() => import("./pages/Dashboard"));
 const InboxPage = lazy(() => import("./pages/Inbox"));
 const Profiles = lazy(() => import("./pages/Profiles"));
 const ProfileDetail = lazy(() => import("./pages/ProfileDetail"));
-const Knowledge = lazy(() => import("./pages/Knowledge"));
-const QAManager = lazy(() => import("./pages/QAManager"));
+const KnowledgeHub = lazy(() => import("./pages/KnowledgeHub"));
 const Channels = lazy(() => import("./pages/Channels"));
 const AISettings = lazy(() => import("./pages/AISettings"));
-const Evaluation = lazy(() => import("./pages/Evaluation"));
-const TestChat = lazy(() => import("./pages/TestChat"));
+const Train = lazy(() => import("./pages/Train"));
 const Leads = lazy(() => import("./pages/Leads"));
+const Comments = lazy(() => import("./pages/Comments"));
+const Posts = lazy(() => import("./pages/Posts"));
 
 function Protected({ admin }: { admin?: boolean }) {
   const { user, loading } = useAuth();
@@ -38,10 +38,13 @@ export default function App() {
           <Route path="profiles" element={<Profiles />} />
           <Route path="profiles/:id" element={<ProfileDetail />} />
           <Route path="leads" element={<Leads />} />
-          <Route path="knowledge" element={<Knowledge />} />
-          <Route path="qa" element={<QAManager />} />
-          <Route path="evaluation" element={<Evaluation />} />
-          <Route path="test-chat" element={<TestChat />} />
+          <Route path="comments" element={<Comments />} />
+          <Route path="posts" element={<Posts />} />
+          <Route path="knowledge" element={<KnowledgeHub />} />
+          <Route path="qa" element={<Navigate to="/knowledge?section=qa" replace />} />
+          <Route path="train" element={<Train />} />
+          <Route path="evaluation" element={<Navigate to="/train?tab=tests" replace />} />
+          <Route path="test-chat" element={<Navigate to="/train?tab=chat" replace />} />
         </Route>
         <Route element={<Protected admin />}>
           <Route path="channels" element={<Channels />} />
