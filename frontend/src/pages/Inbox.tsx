@@ -11,7 +11,7 @@ type Folder = { key: string; label: string; count?: number; params: Record<strin
 const PLATFORM: Record<string, string> = { messenger: "Facebook Messenger", instagram: "Instagram", whatsapp: "WhatsApp" };
 
 /** One inbox for every platform and every connected Facebook Page, Instagram account and WhatsApp number, in the
- *  manner of Meta Business Suite: folders on the left, conversations in the middle, the chat on the right. */
+ *  manner of Meta Business Suite: folders as a row of buttons on top, conversations on the left, the chat on the right. */
 export default function InboxPage() {
   const [sp, setSp] = useSearchParams();
   const [folder, setFolder] = useState("all");
@@ -40,21 +40,21 @@ export default function InboxPage() {
   return (
     <>
       <PageHeader title="Inbox" subtitle="Messages from all your Facebook Pages, Instagram accounts and WhatsApp numbers in one place. The AI answers them; you can step in any time." />
-      <div className="grid gap-4 lg:grid-cols-[220px_320px_1fr]" style={{ minHeight: "60vh" }}>
-        <nav aria-label="Inbox folders" className={cx("rounded-panel border border-line bg-surface p-2", !!sel && "hidden lg:block")}>
-          <ul className="space-y-0.5">{folders.map((f) => (
-            <li key={f.key}><button type="button" onClick={() => setFolder(f.key)} aria-current={folder === f.key}
-                className={cx("flex w-full items-center justify-between gap-2 rounded-ctl px-2.5 py-1.5 text-left text-sm", f.sub && "pl-6 text-xs",
-                  folder === f.key ? "bg-accent-soft font-semibold text-accent-strong" : "text-ink hover:bg-sunken")}>
-              <span className="flex min-w-0 flex-col"><span className="flex min-w-0 items-center gap-1.5">{!f.sub && PLATFORM[f.key] && <ChannelBadge channel={f.key} />}<span className="truncate">{PLATFORM[f.key] ? "" : f.label}</span></span>
-                {f.note && <span className={cx("text-[11px]", f.warn ? "text-danger" : "text-muted")}>{f.note}</span>}</span>
-              {f.count != null && <span className={cx("shrink-0 tabular-nums text-xs", (f.key === "waiting" || f.key === "handover") && f.count ? "font-bold text-warn" : "text-muted")}>{f.count}</span>}
-            </button></li>
-          ))}</ul>
-          <Link to="/comments" className="mt-2 flex items-center justify-between rounded-ctl border-t border-line px-2.5 pt-2 text-sm text-ink hover:text-accent-strong">
-            <span>Facebook post comments</span>{!!s?.comments_waiting && <Badge tone="warn">{s.comments_waiting}</Badge>}</Link>
-          {s && Object.values(s.platforms ?? {}).some((p: any) => !p.accounts || !p.working) && <p className="mt-2 px-2.5 text-xs text-muted">Connect or fix a Page, Instagram account or WhatsApp number on <Link className="font-semibold underline" to="/channels">Pages and numbers</Link>; its messages then arrive here.</p>}
-        </nav>
+      <nav aria-label="Inbox folders" className={cx("mb-4 flex flex-wrap items-center gap-1.5 rounded-panel border border-line bg-surface p-2.5", !!sel && "hidden lg:flex")}>
+        {folders.map((f) => (
+          <button key={f.key} type="button" onClick={() => setFolder(f.key)} aria-current={folder === f.key} title={f.note}
+            className={cx("inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors", f.sub && "text-xs",
+              folder === f.key ? "border-accent bg-accent-soft font-semibold text-accent-strong" : "border-line bg-surface text-ink hover:bg-sunken")}>
+            {!f.sub && PLATFORM[f.key] && <ChannelBadge channel={f.key} />}<span className="max-w-[14rem] truncate">{PLATFORM[f.key] ? "" : f.label}</span>
+            {f.note && <span className={cx("text-[11px]", f.warn ? "text-danger" : "text-muted")}>{f.note}</span>}
+            {f.count != null && <span className={cx("shrink-0 tabular-nums text-xs", (f.key === "waiting" || f.key === "handover") && f.count ? "font-bold text-warn" : "text-muted")}>{f.count}</span>}
+          </button>
+        ))}
+        <Link to="/comments" className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-line px-3 py-1.5 text-sm text-ink hover:text-accent-strong">
+          <span>Facebook post comments</span>{!!s?.comments_waiting && <Badge tone="warn">{s.comments_waiting}</Badge>}</Link>
+        {s && Object.values(s.platforms ?? {}).some((p: any) => !p.accounts || !p.working) && <p className="w-full px-1 text-xs text-muted">Connect or fix a Page, Instagram account or WhatsApp number on <Link className="font-semibold underline" to="/channels">Pages and numbers</Link>; its messages then arrive here.</p>}
+      </nav>
+      <div className="grid gap-4 lg:grid-cols-[320px_1fr]" style={{ minHeight: "60vh" }}>
         <section aria-label="Conversations" className={cx("rounded-panel border border-line bg-surface", !!sel && "hidden lg:block")}>
           <div className="border-b border-line p-3">
             <Input persistDraft={false} type="search" aria-label="Search by name or words" placeholder="Search name or words" value={search} onChange={(e) => setSearch(e.target.value)} />

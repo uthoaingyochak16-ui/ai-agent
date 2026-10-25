@@ -11,7 +11,7 @@ import SheetView, { NewSheet, type Sheet } from "./SheetView";
 
 type Item = { id: string; label: string; icon: typeof BookOpen; count?: number; warn?: boolean; hint: string };
 
-/** Everything the assistant knows, in one place: a side bar that lists each kind of knowledge (and each data sheet)
+/** Everything the assistant knows, in one place: a row of buttons for each kind of knowledge (and each data sheet)
  *  with its size, one search box that looks through all of it, and a start page that says where a new fact belongs. */
 export default function KnowledgeHub() {
   const admin = useAuth().user?.role === "admin";
@@ -22,6 +22,7 @@ export default function KnowledgeHub() {
   const [find, setFind] = useState("");
   const [q, setQ] = useState("");
   const [creating, setCreating] = useState(false);
+  const [advOpen, setAdvOpen] = useState(false);
   useEffect(() => { const t = setTimeout(() => setQ(find.trim()), 350); return () => clearTimeout(t); }, [find]);
   const o = useQuery({ queryKey: ["knowledge-overview"], queryFn: () => api<any>("/api/knowledge/overview"), refetchInterval: 30000 });
   const d = o.data;
@@ -46,7 +47,7 @@ export default function KnowledgeHub() {
 
   return (
     <>
-      <PageHeader title="Knowledge" subtitle="Everything the assistant answers from. Pick a kind on the left, or search everything at once." />
+      <PageHeader title="Knowledge" subtitle="Everything the assistant answers from. Pick a kind below, or search everything at once." />
       <div className="relative mb-4">
         <Search className="pointer-events-none absolute left-3 top-3 h-5 w-5 text-muted" aria-hidden />
         <Input aria-label="Search everything the assistant knows" persistDraft={false} type="search" className="h-11 pl-10 text-base"
@@ -54,22 +55,27 @@ export default function KnowledgeHub() {
         {find && <button type="button" aria-label="Clear the search" className="absolute right-3 top-3 text-muted hover:text-ink" onClick={() => setFind("")}><X className="h-5 w-5" aria-hidden /></button>}
       </div>
       {q.length >= 2 ? <SearchResults q={q} onOpen={(v) => { setFind(""); go(v); }} /> : (
-        <div className="grid gap-5 lg:grid-cols-[250px_minmax(0,1fr)]">
-          <nav aria-label="Kinds of knowledge" className="space-y-4 lg:sticky lg:top-4 lg:self-start">
-            {groups.map((g) => (g.items.length || g.title === "Data sheets") ? (
-              <div key={g.title || "home"}>
-                {g.title && <p className="px-2 pb-1 text-[11px] font-bold uppercase tracking-wide text-muted">{g.title}</p>}
-                <ul className="space-y-0.5">{g.items.map((it) => (
-                  <li key={it.id}><button type="button" onClick={() => go(it.id)} aria-current={view === it.id} title={it.hint}
-                    className={cx("flex w-full items-center gap-2 rounded-ctl px-2 py-1.5 text-left text-sm", view === it.id ? "bg-accent-soft font-semibold text-accent-strong" : "hover:bg-sunken")}>
-                    <it.icon className="h-4 w-4 shrink-0 text-muted" aria-hidden /><span className="min-w-0 flex-1 truncate">{it.label}</span>
-                    {it.count != null && <span className={cx("text-xs tabular-nums", it.warn ? "font-bold text-warn" : "text-muted")}>{it.count}</span>}
-                  </button></li>
-                ))}</ul>
-                {g.title === "Data sheets" && admin && <button type="button" onClick={() => setCreating(true)} className="mt-1 flex w-full items-center gap-2 rounded-ctl px-2 py-1.5 text-sm text-accent-strong hover:bg-sunken"><Plus className="h-4 w-4" aria-hidden />New sheet</button>}
-                {g.title === "Data sheets" && !sheets.length && !admin && <p className="px-2 text-xs text-muted">None yet.</p>}
-              </div>
-            ) : null)}
+        <div className="space-y-4">
+          <nav aria-label="Kinds of knowledge" className="space-y-2.5 rounded-panel border border-line bg-surface p-3">
+            {groups.map((g) => {
+              const advanced = g.title === "Advanced";
+              const shown = !advanced || advOpen || g.items.some((it) => it.id === view);
+              return (g.items.length || g.title === "Data sheets") ? (
+                <div key={g.title || "home"} className="flex flex-wrap items-center gap-1.5">
+                  <span className="mr-1 w-full text-[11px] font-bold uppercase tracking-wide text-muted sm:w-48 sm:shrink-0">{g.title}</span>
+                  {shown && g.items.map((it) => (
+                    <button key={it.id} type="button" onClick={() => go(it.id)} aria-current={view === it.id} title={it.hint}
+                      className={cx("inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors", view === it.id ? "border-accent bg-accent-soft font-semibold text-accent-strong" : "border-line bg-surface hover:bg-sunken")}>
+                      <it.icon className="h-4 w-4 shrink-0 text-muted" aria-hidden /><span className="max-w-[16rem] truncate">{it.label}</span>
+                      {it.count != null && <span className={cx("text-xs tabular-nums", it.warn ? "font-bold text-warn" : "text-muted")}>{it.count}</span>}
+                    </button>
+                  ))}
+                  {advanced && !shown && <button type="button" onClick={() => setAdvOpen(true)} className="rounded-full border border-dashed border-line px-3 py-1.5 text-sm text-muted hover:bg-sunken">Show {g.items.length} more tools</button>}
+                  {g.title === "Data sheets" && admin && <button type="button" onClick={() => setCreating(true)} className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-accent/50 px-3 py-1.5 text-sm text-accent-strong hover:bg-sunken"><Plus className="h-4 w-4" aria-hidden />New sheet</button>}
+                  {g.title === "Data sheets" && !sheets.length && !admin && <span className="text-xs text-muted">None yet.</span>}
+                </div>
+              ) : null;
+            })}
           </nav>
           <section aria-label="Selected knowledge" className="min-w-0">
             {o.isLoading ? <Spinner /> :
