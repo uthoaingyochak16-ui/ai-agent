@@ -64,33 +64,42 @@ export default function Comments() {
   return (
     <>
       <h1 className="sr-only">Post comments</h1>
-      {/* one compact bar: which comments, filters, search, mode and tools */}
-      <div className="mb-3 flex flex-wrap items-center gap-1.5 rounded-panel border border-line bg-surface p-1.5 xl:flex-nowrap">
-        <div className="flex shrink-0 rounded-ctl bg-sunken p-0.5" role="tablist" aria-label="Which comments">
-          {GROUPS.map((g) => {
-            const n = g.key === "all" ? Object.values(d?.groups ?? {}).reduce((a: number, b: any) => a + b, 0) : d?.groups?.[g.key];
-            return <button key={g.key} type="button" role="tab" aria-selected={group === g.key} title={g.hint} onClick={() => { setGroup(g.key); setOpen(null); }}
-              className={cx("whitespace-nowrap rounded-[5px] px-2 py-1 text-xs font-semibold", group === g.key ? "bg-surface text-ink shadow-sm" : "text-muted hover:text-ink")}>
-              {g.label}{n != null && <span className={cx("ml-1 tabular-nums", g.key === "todo" && n ? "rounded-full bg-warn px-1.5 text-white" : "opacity-70")}>{n}</span>}</button>;
-          })}
+      {/* Keep the comment groups above the right-aligned filters. */}
+      <div className="mb-3 space-y-1.5 rounded-panel border border-line bg-surface p-1.5">
+        <div className="min-w-0 overflow-x-auto">
+          <div className="flex w-max min-w-full">
+            <div className="flex shrink-0 rounded-ctl bg-sunken p-0.5" role="tablist" aria-label="Which comments">
+              {GROUPS.map((g) => {
+                const n = g.key === "all" ? Object.values(d?.groups ?? {}).reduce((a: number, b: any) => a + b, 0) : d?.groups?.[g.key];
+                return <button key={g.key} type="button" role="tab" aria-selected={group === g.key} title={g.hint} onClick={() => { setGroup(g.key); setOpen(null); }}
+                  className={cx("whitespace-nowrap rounded-[5px] px-2 py-1 text-xs font-semibold", group === g.key ? "bg-surface text-ink shadow-sm" : "text-muted hover:text-ink")}>
+                  {g.label}{n != null && <span className={cx("ml-1 tabular-nums", g.key === "todo" && n ? "rounded-full bg-warn px-1.5 text-white" : "opacity-70")}>{n}</span>}</button>;
+              })}
+            </div>
+          </div>
         </div>
-        <Select aria-label="Platform" persistDraft={false} className="h-8 w-auto shrink-0 py-0 text-xs" value={channel} onChange={(e) => { setChannel(e.target.value); setPage(""); }}>
-          <option value="">FB + IG</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option></Select>
-        {accounts.length > 1 && <Select aria-label="Page or account" persistDraft={false} className="h-8 w-auto max-w-[160px] shrink-0 py-0 text-xs" value={page} onChange={(e) => setPage(e.target.value)}>
-          <option value="">All Pages</option>{accounts.map((a) => <option key={`${a.channel}:${a.page_id}`} value={a.page_id}>{a.label || a.page_id} ({a.comments})</option>)}</Select>}
-        <Select aria-label="Kind of comment" persistDraft={false} className="h-8 w-auto shrink-0 py-0 text-xs" value={kind} onChange={(e) => setKind(e.target.value)}>
-          <option value="">Any kind</option>{Object.entries(KIND).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</Select>
-        <div className="relative min-w-[140px] flex-1">
-          <Search className="pointer-events-none absolute left-2 top-2 h-4 w-4 text-muted" aria-hidden />
-          <Input aria-label="Search comments" persistDraft={false} type="search" className="h-8 py-0 pl-7 text-xs" placeholder="Search" value={find} onChange={(e) => setFind(e.target.value)} />
+        <div className="min-w-0 overflow-x-auto">
+          <div className="flex w-max min-w-full items-center justify-start gap-1.5">
+            <div className="relative w-[140px] shrink-0">
+              <Search className="pointer-events-none absolute left-2 top-2 h-4 w-4 text-muted" aria-hidden />
+              <Input aria-label="Search comments" persistDraft={false} type="search" className="h-8 py-0 pl-7 text-xs" placeholder="Search" value={find} onChange={(e) => setFind(e.target.value)} />
+            </div>
+            <Select aria-label="Platform" persistDraft={false} className="!w-[84px] h-8 shrink-0 px-2 py-0 pr-7 text-xs" value={channel} onChange={(e) => { setChannel(e.target.value); setPage(""); }}>
+              <option value="">FB + IG</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option></Select>
+            {accounts.length > 1 && <Select aria-label="Page or account" persistDraft={false} className="!w-[140px] h-8 shrink-0 px-2 py-0 pr-7 text-xs" value={page} onChange={(e) => setPage(e.target.value)}>
+              <option value="">All Pages</option>{accounts.map((a) => <option key={`${a.channel}:${a.page_id}`} value={a.page_id}>{a.label || a.page_id} ({a.comments})</option>)}</Select>}
+            <Select aria-label="Kind of comment" persistDraft={false} className="!w-[120px] h-8 shrink-0 px-2 py-0 pr-7 text-xs" value={kind} onChange={(e) => setKind(e.target.value)}>
+              <option value="">Any kind</option>{Object.entries(KIND).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</Select>
+            <span className="min-w-2 flex-1" />
+            <Select aria-label="How the assistant handles comments" persistDraft={false} disabled={!admin || save.isPending} title="Off: not read · Review first: the AI drafts, you send · Automatic: the AI replies and likes"
+              className={cx("!w-[130px] h-8 shrink-0 px-2 py-0 pr-7 text-xs font-semibold", (st.comment_mode ?? "off") !== "off" && "border-accent text-accent-strong")}
+              value={st.comment_mode ?? "off"} onChange={(e) => save.mutate({ comment_mode: e.target.value })}>
+              {MODES.map((m) => <option key={m.value} value={m.value}>AI: {m.label}</option>)}</Select>
+            <IconButton label="Check a comment (real, spam or against us?)" className="h-8 w-8 shrink-0" onClick={() => setShowCheck(true)}><ShieldAlert className="h-4 w-4" aria-hidden /></IconButton>
+            <IconButton label="Scan the last 10 posts of every account" className="h-8 w-8 shrink-0" onClick={() => scan.mutate()} disabled={scan.isPending}><ScanSearch className={cx("h-4 w-4", scan.isPending && "animate-pulse")} aria-hidden /></IconButton>
+            <IconButton label="Comment settings" className="h-8 w-8 shrink-0" onClick={() => setShowSettings(true)}><Settings2 className="h-4 w-4" aria-hidden /></IconButton>
+          </div>
         </div>
-        <Select aria-label="How the assistant handles comments" persistDraft={false} disabled={!admin || save.isPending} title="Off: not read · Review first: the AI drafts, you send · Automatic: the AI replies and likes"
-          className={cx("h-8 w-auto shrink-0 py-0 text-xs font-semibold", (st.comment_mode ?? "off") !== "off" && "border-accent text-accent-strong")}
-          value={st.comment_mode ?? "off"} onChange={(e) => save.mutate({ comment_mode: e.target.value })}>
-          {MODES.map((m) => <option key={m.value} value={m.value}>AI: {m.label}</option>)}</Select>
-        <IconButton label="Check a comment (real, spam or against us?)" className="h-8 w-8 shrink-0" onClick={() => setShowCheck(true)}><ShieldAlert className="h-4 w-4" aria-hidden /></IconButton>
-        <IconButton label="Scan the last 10 posts of every account" className="h-8 w-8 shrink-0" onClick={() => scan.mutate()} disabled={scan.isPending}><ScanSearch className={cx("h-4 w-4", scan.isPending && "animate-pulse")} aria-hidden /></IconButton>
-        <IconButton label="Comment settings" className="h-8 w-8 shrink-0" onClick={() => setShowSettings(true)}><Settings2 className="h-4 w-4" aria-hidden /></IconButton>
       </div>
       {(st.comment_mode ?? "off") === "off" && <p className="mb-2 text-xs text-muted">The AI is not reading new comments (“AI: Off”). Choose “Review first” or “Automatic” in the bar; scanning works in any mode.</p>}
       <ErrorNote error={list.error || save.error || scan.error} />

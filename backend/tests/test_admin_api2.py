@@ -188,6 +188,54 @@ async def test_provider_connection_test_uses_guarded_request(client, admin):
     assert bad["ok"] is False and "401" in bad["error"]
 
 
+@respx.mock
+async def test_openai_model_catalog_uses_saved_key_and_paginates(client, admin):
+    await client.put("/api/ai/providers/openai", headers=admin, json={"api_key": "catalog-key"})
+    listing = respx.get("https://api.openai.com/v1/models").mock(side_effect=[
+        httpx.Response(200, json={"data": [{"id": "gpt-a"}], "has_more": True}),
+        httpx.Response(200, json={"data": [{"id": "gpt-b"}], "has_more": False}),
+    ])
+
+    response = await client.get("/api/ai/providers/openai/models", headers=admin)
+
+    assert response.status_code == 200
+    assert [model["id"] for model in response.json()["models"]] == ["gpt-a", "gpt-b"]
+    assert listing.call_count == 2
+    assert listing.calls[0].request.headers["authorization"] == "Bearer catalog-key"
+    assert listing.calls[1].request.url.params["after"] == "gpt-a"
+
+
+@respx.mock
+async def test_anthropic_model_catalog_uses_saved_key(client, admin):
+    await client.put("/api/ai/providers/anthropic", headers=admin, json={"api_key": "catalog-key"})
+    listing = respx.get("https://api.anthropic.com/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "claude-a", "display_name": "Claude A"}], "has_more": False}))
+
+    response = await client.get("/api/ai/providers/anthropic/models", headers=admin)
+
+    assert response.status_code == 200
+    assert response.json()["models"] == [{"id": "claude-a", "display_name": "Claude A"}]
+    assert listing.calls[0].request.headers["x-api-key"] == "catalog-key"
+
+
+@respx.mock
+async def test_google_model_catalog_only_returns_generation_models(client, admin):
+    await client.put("/api/ai/providers/google", headers=admin, json={"api_key": "catalog-key"})
+    listing = respx.get("https://generativelanguage.googleapis.com/v1beta/models").mock(return_value=httpx.Response(
+        200, json={"models": [
+            {"name": "models/gemini-a", "displayName": "Gemini A", "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/embed-a", "supportedGenerationMethods": ["embedContent"]},
+        ]}))
+
+    response = await client.get("/api/ai/providers/google/models", headers=admin)
+
+    assert response.status_code == 200
+    assert response.json()["models"] == [{"id": "gemini-a", "display_name": "Gemini A"}]
+    request = listing.calls[0].request
+    assert request.headers["x-goog-api-key"] == "catalog-key"
+    assert "catalog-key" not in str(request.url)
+
+
 # ---------------------------------------------------------------------------------------------- Test Chat
 @pytest.fixture
 async def chat_env(session, tmp_path, monkeypatch):

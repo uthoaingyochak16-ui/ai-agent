@@ -62,18 +62,18 @@ function PostList({ onCreate }: { onCreate: () => void }) {
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-1.5 rounded-panel border border-line bg-surface p-1.5">
-        <Select aria-label="Status" persistDraft={false} className="h-8 w-auto py-0 text-xs" value={status} onChange={(e) => setStatus(e.target.value)}>
+        <Input aria-label="Search posts" persistDraft={false} type="search" className="h-8 min-w-[180px] flex-1 py-0 text-xs" placeholder="Search text or topic" value={q} onChange={(e) => setQ(e.target.value)} />
+        <Select aria-label="Status" persistDraft={false} className="h-8 w-[210px] max-w-full py-0 text-xs" value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="">All posts</option><option value="pending_approval">Waiting for approval ({c.pending_approval ?? 0})</option><option value="scheduled">Scheduled ({c.scheduled ?? 0})</option><option value="draft">Drafts ({c.draft ?? 0})</option>
           <option value="published">Published ({c.published ?? 0})</option><option value="failed">Failed ({c.failed ?? 0})</option></Select>
-        <Select aria-label="Platform" persistDraft={false} className="h-8 w-auto py-0 text-xs" value={channel} onChange={(e) => setChannel(e.target.value)}>
+        <Select aria-label="Platform" persistDraft={false} className="h-8 w-[130px] max-w-full py-0 text-xs" value={channel} onChange={(e) => setChannel(e.target.value)}>
           <option value="">FB + IG</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option></Select>
-        <Select aria-label="Sort" persistDraft={false} className="h-8 w-auto py-0 text-xs" value={sort} onChange={(e) => setSort(e.target.value)}>
+        <Select aria-label="Sort" persistDraft={false} className="h-8 w-[175px] max-w-full py-0 text-xs" value={sort} onChange={(e) => setSort(e.target.value)}>
           <option value="recent">Newest first</option><option value="best">Best performing first</option></Select>
-        <Input aria-label="Search posts" persistDraft={false} type="search" className="h-8 min-w-[140px] flex-1 py-0 text-xs" placeholder="Search text or topic" value={q} onChange={(e) => setQ(e.target.value)} />
-        <Button size="sm" loading={sync.isPending} onClick={() => sync.mutate()} title="Read the latest posts and their numbers from Facebook and Instagram (also every 3 hours)"><RefreshCw className="h-4 w-4" aria-hidden />Refresh numbers</Button>
-        <Button size="sm" loading={progDrafts.isPending} onClick={() => progDrafts.mutate()} title="An invitation and a reminder draft for each upcoming program without a post">Program drafts</Button>
-        <Button size="sm" loading={plan.isPending} onClick={() => plan.mutate()} title="The AI plans the next 2 weeks from your numbers and saves the posts as drafts (nothing is published)"><Sparkles className="h-4 w-4" aria-hidden />AI: plan 2 weeks</Button>
-        <Button size="sm" variant="primary" onClick={onCreate}><PenLine className="h-4 w-4" aria-hidden />Create</Button>
+        <Button size="sm" className="shrink-0" loading={sync.isPending} onClick={() => sync.mutate()} title="Read the latest posts and their numbers from Facebook and Instagram (also every 3 hours)"><RefreshCw className="h-4 w-4" aria-hidden />Refresh numbers</Button>
+        <Button size="sm" className="shrink-0" loading={progDrafts.isPending} onClick={() => progDrafts.mutate()} title="An invitation and a reminder draft for each upcoming program without a post">Program drafts</Button>
+        <Button size="sm" className="shrink-0" loading={plan.isPending} onClick={() => plan.mutate()} title="The AI plans the next 2 weeks from your numbers and saves the posts as drafts (nothing is published)"><Sparkles className="h-4 w-4" aria-hidden />AI: plan 2 weeks</Button>
+        <Button size="sm" className="shrink-0" variant="primary" onClick={onCreate}><PenLine className="h-4 w-4" aria-hidden />Create</Button>
       </div>
       {(c.pending_approval ?? 0) > 0 && <p className="rounded-ctl border border-warn/50 bg-warn-soft px-3 py-1.5 text-sm text-warn">{c.pending_approval} post(s) wait for an admin's approval{admin ? ": approve or send them back below." : "."}</p>}
       <ErrorNote error={list.error || sync.error || publish.error || del.error || review.error || plan.error || progDrafts.error} />

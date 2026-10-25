@@ -1,9 +1,57 @@
-.env
-backend/.env
-__pycache__/
-.pytest_cache/
-.venv/
-uploads/
-node_modules/
-backups/
+# Secrets and local environment files
+**/.env
+**/.env.*
+!**/.env.example
 staging-mainapp.override.yml
+docker-compose.override.yml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Node.js / frontend build output
+node_modules/
+dist/
+coverage/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Runtime data, local backups, and logs
+uploads/
+backups/
+*.log
+*.dump
+*.bak
+*.backup
+*.sqlite
+*.sqlite3
+*.db
+*.sql.gz
+
+# Local certificates and private keys
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Operating system and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo

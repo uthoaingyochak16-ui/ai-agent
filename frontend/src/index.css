@@ -1,28 +1,56 @@
-@import "@fontsource/atkinson-hyperlegible-next/400.css";
-@import "@fontsource/atkinson-hyperlegible-next/600.css";
-@import "@fontsource/atkinson-hyperlegible-next/700.css";
+@import "@fontsource-variable/bricolage-grotesque/index.css";
+@import "@fontsource/instrument-sans/400.css";
+@import "@fontsource/instrument-sans/500.css";
+@import "@fontsource/instrument-sans/600.css";
+@import "@fontsource/instrument-sans/700.css";
 @import "@fontsource/noto-sans-bengali/400.css";
 @import "@fontsource/noto-sans-bengali/600.css";
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* Night jade and brass: a quiet hospitality palette. The side bar is always dark; the work area follows the theme. */
 :root {
-  --bg: 244 247 248; --surface: 255 255 255; --sunken: 236 241 243; --ink: 18 35 43; --muted: 84 104 113; --line: 214 224 229;
-  --accent: 14 124 134; --accent-strong: 10 95 103; --accent-soft: 218 241 243; --on-accent: 255 255 255; --blue: 37 99 168;
-  --ok: 22 124 74; --warn: 169 90 8; --danger: 180 35 24;
+  --bg: 240 243 242; --surface: 255 255 255; --sunken: 232 237 236; --ink: 14 31 33; --muted: 88 107 109; --line: 218 226 225;
+  --accent: 13 107 99; --accent-strong: 8 79 73; --accent-soft: 222 240 236; --on-accent: 255 255 255; --blue: 37 99 168;
+  --brass: 176 133 52; --brass-soft: 247 238 217;
+  --ok: 22 124 74; --warn: 164 88 8; --danger: 178 35 24;
   --ok-soft: 220 243 230; --warn-soft: 252 238 214; --danger-soft: 252 226 223; --blue-soft: 222 235 249;
+  --side: 11 36 38; --side-raised: 20 54 56; --side-ink: 224 236 234; --side-muted: 134 163 160; --side-line: 30 66 68;
+  --shadow: 11 36 38;
 }
 .dark {
-  --bg: 11 20 24; --surface: 17 30 36; --sunken: 9 16 20; --ink: 230 238 241; --muted: 143 163 172; --line: 36 54 64;
-  --accent: 60 196 207; --accent-strong: 120 218 226; --accent-soft: 18 56 62; --on-accent: 6 24 28; --blue: 122 173 232;
+  --bg: 8 18 20; --surface: 15 30 32; --sunken: 7 14 16; --ink: 228 238 236; --muted: 138 161 161; --line: 31 52 54;
+  --accent: 62 190 172; --accent-strong: 126 222 206; --accent-soft: 16 58 54; --on-accent: 4 26 24; --blue: 122 173 232;
+  --brass: 214 173 96; --brass-soft: 58 44 18;
   --ok: 92 205 148; --warn: 240 177 82; --danger: 245 130 118;
   --ok-soft: 16 54 38; --warn-soft: 58 42 14; --danger-soft: 66 28 24; --blue-soft: 22 40 66;
+  --side: 6 15 17; --side-raised: 15 33 35; --side-line: 24 44 46;
+  --shadow: 0 0 0;
 }
 html { color-scheme: light; }
 html.dark { color-scheme: dark; }
-body { @apply bg-bg text-ink font-sans antialiased; font-size: 15px; line-height: 1.5; }
+body { @apply bg-bg text-ink font-sans antialiased; font-size: 15px; line-height: 1.55; font-feature-settings: "ss01", "cv11"; }
+body::before { /* a faint wash of jade at the top of every page */
+  content: ""; position: fixed; inset: 0 0 auto 0; height: 360px; z-index: -1; pointer-events: none;
+  background: radial-gradient(900px 260px at 70% -80px, rgb(var(--accent) / 0.10), transparent 70%);
+}
+h1, h2, h3 { font-family: theme("fontFamily.display"); letter-spacing: -0.015em; }
 :focus-visible { outline: 2px solid rgb(var(--accent)); outline-offset: 2px; }
-@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 ::selection { background: rgb(var(--accent) / 0.25); }
 pre, code { font-family: theme("fontFamily.mono"); }
+* { scrollbar-width: thin; scrollbar-color: rgb(var(--line)) transparent; }
+input[type="search"]::-webkit-search-cancel-button { filter: grayscale(1); }
+
+@layer utilities {
+  .rise { animation: rise .5s cubic-bezier(.2,.7,.2,1) both; }
+  .rise-2 { animation: rise .5s .08s cubic-bezier(.2,.7,.2,1) both; }
+  .pop { animation: pop .18s cubic-bezier(.2,.8,.2,1) both; }
+  .fade { animation: fade .18s ease-out both; }
+  .slide-in { animation: slide-in .28s cubic-bezier(.2,.8,.2,1) both; }
+}
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes pop { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slide-in { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

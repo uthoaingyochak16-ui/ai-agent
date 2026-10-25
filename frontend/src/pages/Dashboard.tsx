@@ -17,7 +17,7 @@ function Bars({ data, field, label, fmt }: { data: Daily[]; field: "messages" | 
       <svg viewBox={`0 0 ${W} ${H + 18}`} role="img" aria-label={`${label}, last ${data.length} days. Peak ${fmt(max)}.`} className="w-full">
         {data.map((d, i) => {
           const h = (d[field] / max) * H;
-          return <rect key={d.date} x={i * bw + 2} y={H - h} width={Math.max(2, bw - 4)} height={Math.max(h, d[field] > 0 ? 2 : 0)} rx="2" className="fill-accent"><title>{`${d.date}: ${fmt(d[field])}`}</title></rect>;
+          return <rect key={d.date} x={i * bw + 2} y={H - h} width={Math.max(2, bw - 4)} height={Math.max(h, d[field] > 0 ? 2 : 0)} rx="3" className={i === data.length - 1 ? "fill-brass" : "fill-accent/75"}><title>{`${d.date}: ${fmt(d[field])}`}</title></rect>;
         })}
         <line x1="0" x2={W} y1={H} y2={H} className="stroke-line" />
         <text x="0" y={H + 13} className="fill-muted text-[10px]">{data[0]?.date.slice(5)}</text>
@@ -42,11 +42,12 @@ export default function Dashboard() {
     <>
       <PageHeader title="Overview" subtitle="How many guests wrote, how the assistant answered them, and what needs your attention."
         actions={<Select aria-label="Period" value={days} onChange={(e) => setDays(+e.target.value)} className="w-auto"><option value={7}>Last 7 days</option><option value={14}>Last 14 days</option><option value={30}>Last 30 days</option></Select>} />
+      <Briefing d={d} days={days} />
       {d.embeddings?.hash_warning && <div className="mb-5 rounded-panel border border-warn bg-warn-soft px-4 py-3 text-sm text-warn"><strong>Embedding warning:</strong> hash embeddings are for testing and give weak Bangla/Banglish semantic search. Configure OpenAI, Google, or a private local endpoint in AI Settings → Retrieval.</div>}
       {user?.role === "admin" && <SystemHealth days={days} />}
-      <dl className="mb-5 grid grid-cols-2 gap-x-6 gap-y-3 border-y border-line py-4 sm:grid-cols-4">
-        {[["Messages received", num(d.totals.messages_in)], ["AI cost", usd(d.totals.cost)], ["Tokens in / out", `${num(d.totals.tokens_in)} / ${num(d.totals.tokens_out)}`], ["Unanswered questions", num(d.unanswered.open)]].map(([k, v]) => (
-          <div key={k}><dt className="text-sm text-muted">{k}</dt><dd className="text-2xl font-bold tabular-nums">{v}</dd></div>
+      <dl className="rise-2 mb-6 grid grid-cols-1 divide-y divide-line overflow-hidden rounded-panel border border-line bg-surface shadow-panel sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+        {[["Messages received", num(d.totals.messages_in)], ["AI cost", usd(d.totals.cost)], ["Tokens in / out", `${num(d.totals.tokens_in)} / ${num(d.totals.tokens_out)}`]].map(([k, v]) => (
+          <div key={k} className="px-5 py-4"><dt className="text-sm text-muted">{k}</dt><dd className="mt-0.5 font-display text-2xl font-semibold tabular-nums">{v}</dd></div>
         ))}
       </dl>
       {b.level !== "unlimited" && (
@@ -78,7 +79,7 @@ export default function Dashboard() {
         <Panel title="Unanswered questions" actions={<Link to="/train?tab=failed" className="text-sm font-semibold text-accent-strong underline">Find why and fix</Link>}>
           <dl className="mb-3 grid grid-cols-3 gap-2 text-center">
             {[["Asked more than once", d.unanswered.repeated], ["Answer-is-wrong feedback", d.unanswered.feedback], ["Drafts awaiting approval", d.unanswered.pending_approval]].map(([k, v]) => (
-              <div key={k as string} className="rounded-ctl bg-sunken p-2"><dt className="text-xs text-muted">{k}</dt><dd className="text-lg font-semibold">{num((v as number) ?? 0)}</dd></div>))}
+              <div key={k as string} className="rounded-ctl bg-sunken p-2.5"><dt className="text-xs text-muted">{k}</dt><dd className="font-display text-xl font-semibold">{num((v as number) ?? 0)}</dd></div>))}
           </dl>
           {!!d.unanswered.topics?.length && <p className="mb-2 text-xs text-muted"><span className="font-semibold">Repeated topics:</span> {d.unanswered.topics.map((t: any) => `${t.category} (${t.asked}×)`).join(" · ")}</p>}
           {d.unanswered.recent.length === 0 ? <p className="text-sm text-muted">Nothing waiting. Questions the assistant could not answer appear here.</p> : (
@@ -97,6 +98,37 @@ export default function Dashboard() {
         </Panel>
       </div>
     </>
+  );
+}
+
+/** The page opens with what the desk needs to know, said in one sentence, with the busiest days drawn beside it. */
+function Briefing({ d, days }: { d: any; days: number }) {
+  const waiting = d.handover.length, open = d.unanswered.open;
+  const n = (v: number | string, unit: string) => <><b className="font-display text-[1.25em] font-semibold tabular-nums text-white">{v}</b> {unit}</>;
+  const max = Math.max(1, ...d.daily.map((x: Daily) => x.messages));
+  return (
+    <section aria-label="Summary" className="rise relative mb-5 overflow-hidden rounded-panel bg-side text-side-ink shadow-lg">
+      <div aria-hidden className="absolute inset-0 bg-[radial-gradient(520px_240px_at_0%_0%,rgb(var(--accent)/0.30),transparent_70%)]" />
+      <div className="relative grid items-end gap-6 p-6 sm:p-8 md:grid-cols-[minmax(0,1fr)_260px]">
+        <div>
+          <p className="text-sm text-side-muted">Last {days} days</p>
+          <p className="mt-2 max-w-xl font-display text-[26px] font-medium leading-snug sm:text-[30px]">
+            Guests sent {n(num(d.totals.messages_in), "messages")}. {waiting === 0 ? "Nobody is waiting for a person." : <>{n(waiting, waiting === 1 ? "conversation is" : "conversations are")} waiting for a person.</>}{" "}
+            {open === 0 ? "Every question was answered." : <>{n(open, open === 1 ? "question" : "questions")} still need an answer.</>}
+          </p>
+          <div className="mt-6 flex flex-wrap gap-2">
+            <Link to="/inbox" className="inline-flex items-center gap-2 rounded-ctl bg-brass px-4 py-2 text-sm font-semibold text-side shadow-sm transition-colors hover:brightness-110">Open inbox</Link>
+            <Link to="/train?tab=failed" className="inline-flex items-center gap-2 rounded-ctl border border-side-line px-4 py-2 text-sm font-semibold text-side-ink transition-colors hover:bg-side-raised">Review unanswered</Link>
+          </div>
+        </div>
+        <div aria-hidden className="flex h-24 items-end gap-1 md:h-28">
+          {d.daily.map((x: Daily, i: number) => (
+            <span key={x.date} title={`${x.date}: ${num(x.messages)}`} style={{ height: `${Math.max(4, (x.messages / max) * 100)}%` }}
+              className={`flex-1 rounded-t-[3px] ${i === d.daily.length - 1 ? "bg-brass" : "bg-accent/60"}`} />
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -126,7 +158,7 @@ function SystemHealth({ days }: { days: number }) {
         {[["Resolved by AI", pct(ai.resolution_rate)], ["Handed to a person", pct(ai.handover_rate)], ["“Don't know” replies", pct(ai.no_context_rate)],
           ["AI cost per conversation", ai.avg_cost_per_conversation == null ? "-" : usd(ai.avg_cost_per_conversation)],
           ["Median reply time", ai.median_reply_latency_s == null ? "-" : `${ai.median_reply_latency_s.toFixed(1)} s`]].map(([k, v]) => (
-          <div key={k}><dt className="text-sm text-muted">{k}</dt><dd className="text-xl font-bold tabular-nums">{v}</dd></div>))}
+          <div key={k}><dt className="text-sm text-muted">{k}</dt><dd className="font-display text-xl font-semibold tabular-nums">{v}</dd></div>))}
       </dl>
       <p className="mt-2 text-xs text-muted">{num(ai.conversations)} conversations in the period. Resolved = got an AI reply, no staff reply and no handover.</p>
     </Panel>

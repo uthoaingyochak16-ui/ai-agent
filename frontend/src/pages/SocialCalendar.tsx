@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, ChevronLeft, ChevronRight, ExternalLink } from "lucide-react";
+import { CalendarDays, ExternalLink } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Badge, Button, ChannelBadge, ErrorNote, IconButton, Modal, Spinner, cx, useToast } from "../components/ui";
+import { Badge, Button, ChannelBadge, ErrorNote, Input, Modal, Spinner, cx, useToast } from "../components/ui";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { when } from "../lib/format";
@@ -55,9 +55,15 @@ export default function SocialCalendar() {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <IconButton label="Previous month" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}><ChevronLeft className="h-4 w-4" aria-hidden /></IconButton>
-        <h2 className="min-w-[140px] text-center font-bold">{month.toLocaleDateString([], { month: "long", year: "numeric" })}</h2>
-        <IconButton label="Next month" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}><ChevronRight className="h-4 w-4" aria-hidden /></IconButton>
+        <label className="flex items-center gap-2 text-sm font-semibold">
+          <CalendarDays className="h-4 w-4 text-accent-strong" aria-hidden />
+          <span className="sr-only">Choose calendar month</span>
+          <Input aria-label="Choose calendar month" persistDraft={false} type="month" className="h-9 w-auto py-1" value={`${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, "0")}`}
+            onChange={(e) => {
+              const [year, selectedMonth] = e.target.value.split("-").map(Number);
+              if (year && selectedMonth) setMonth(new Date(year, selectedMonth - 1, 1));
+            }} />
+        </label>
         <Button size="sm" variant="ghost" onClick={() => { const d = new Date(); setMonth(new Date(d.getFullYear(), d.getMonth(), 1)); }}>Today</Button>
         <span className="flex-1" />
         <span className="flex flex-wrap gap-1 text-[11px] text-muted">{[["published", "Published"], ["scheduled", "Scheduled"], ["pending_approval", "Waits for approval"], ["draft", "Draft (AI suggestion)"], ["failed", "Failed"]].map(([k, l]) =>

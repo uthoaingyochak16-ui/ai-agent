@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Badge, Button, ErrorNote, Field, IconButton, Input, Meter, PageHeader, Panel, SecretInput, Select, Spinner, Switch, Tabs, TableWrap, Td, Textarea, Th, useToast } from "../components/ui";
 import { api } from "../lib/api";
 import { useDebouncedAutosave } from "../lib/autosave";
@@ -20,11 +21,14 @@ function useSettings() {
 }
 
 export default function AISettings() {
+  const [params, setParams] = useSearchParams();
   const [tab, setTabState] = useState<Tab>(() => {
+    const requested = params.get("tab") as Tab | null;
+    if (requested && AI_TABS.includes(requested)) return requested;
     const saved = localStorage.getItem("assistant:ai-settings-tab") as Tab | null;
     return saved && AI_TABS.includes(saved) ? saved : "providers";
   });
-  const setTab = (next: Tab) => { localStorage.setItem("assistant:ai-settings-tab", next); setTabState(next); };
+  const setTab = (next: Tab) => { localStorage.setItem("assistant:ai-settings-tab", next); setTabState(next); setParams({ tab: next }, { replace: true }); };
   return (
     <>
       <PageHeader title="AI settings" subtitle="Which providers and models answer, what they cost, and what is allowed to leave your system." />
@@ -76,8 +80,24 @@ function ProviderCard({ p }: { p: any }) {
   const [base, setBase] = useState(p.base_url ?? "");
   const [model, setModel] = useState("");
   const [res, setRes] = useState<any>(null);
+  const catalog = useQuery({
+    queryKey: ["provider-model-catalog", p.name, p.base_url],
+    queryFn: () => api<{ models: { id: string; display_name: string }[] }>(`/api/ai/providers/${p.name}/models`),
+    enabled: !!p.has_key,
+  });
   const save = useMutation({ mutationFn: (b: any) => api(`/api/ai/providers/${p.name}`, { method: "PUT", body: b }), onSuccess: () => { toast("Provider saved"); setKey(""); qc.invalidateQueries({ queryKey: ["providers"] }); } });
   const test = useMutation({ mutationFn: () => api(`/api/ai/providers/${p.name}/test`, { body: { model } }), onSuccess: setRes });
+  const useForAnswers = useMutation({
+    mutationFn: async () => {
+      await api(`/api/ai/providers/${p.name}`, { method: "PUT", body: { enabled: true } });
+      return api("/api/ai/routes/answer", { method: "PUT", body: { primary_provider: p.name, primary_model: model, max_tokens: 400, temperature: 0.2 } });
+    },
+    onSuccess: () => {
+      toast("Answer route configured");
+      qc.invalidateQueries({ queryKey: ["providers"] });
+      qc.invalidateQueries({ queryKey: ["routes"] });
+    },
+  });
   useEffect(() => setBase(p.base_url ?? ""), [p.base_url]);
   useDebouncedAutosave(base, true, () => { if (base !== p.base_url) save.mutate({ base_url: base }); });
   return (
@@ -91,11 +111,27 @@ function ProviderCard({ p }: { p: any }) {
         <Switch checked={p.allow_pii} onChange={(v) => save.mutate({ allow_pii: v })} label="Allow personal data (zero-retention agreement or self-hosted)" />
       </div>
       <p className="mt-2 text-xs text-muted">With "Allow personal data" off, phone numbers, emails, addresses and names are always replaced with placeholders before anything is sent. Cards, national IDs and your custom patterns are redacted either way.</p>
+      <div className="mt-3">
+        <ErrorNote error={catalog.error} />
+        {p.has_key && catalog.data && <p className="text-xs text-muted">{catalog.data.models.length} available model(s) loaded from {p.name}.</p>}
+      </div>
       <form className="mt-3 flex flex-wrap items-end gap-2 border-t border-line pt-3" onSubmit={(e) => { e.preventDefault(); setRes(null); test.mutate(); }}>
-        <Field label="Test with model" className="min-w-[220px] flex-1">{(i) => <Input id={i} required placeholder="model name" value={model} onChange={(e) => setModel(e.target.value)} />}</Field>
+        <Field label="Test with model" className="min-w-[220px] flex-1">{(i) => catalog.data?.models.length ? (
+          <Select id={i} required value={model} onChange={(e) => { setModel(e.target.value); setRes(null); }}>
+            <option value="">Select a model</option>
+            {model && !catalog.data.models.some((m) => m.id === model) && <option value={model}>Saved model: {model}</option>}
+            {catalog.data.models.map((m) => <option key={m.id} value={m.id}>{m.display_name}</option>)}
+          </Select>
+        ) : <Input id={i} required placeholder={catalog.isLoading ? "Loading models…" : "model name"} value={model} onChange={(e) => { setModel(e.target.value); setRes(null); }} list={`provider-models-${p.name}`} />}</Field>
+        <datalist id={`provider-models-${p.name}`}>{catalog.data?.models.map((m) => <option key={m.id} value={m.id} />)}</datalist>
         <Button type="submit" loading={test.isPending} disabled={!p.has_key}>Test connection</Button>
         {res && <span className={`text-sm ${res.ok ? "text-ok" : "text-danger"}`}>{res.ok ? `Works (${res.latency_ms} ms)` : res.error}</span>}
       </form>
+      {res?.ok && <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="primary" loading={useForAnswers.isPending} onClick={() => useForAnswers.mutate()}>Use this model for answers</Button>
+        <span className="text-xs text-muted">Enables this provider and configures the route needed by Teach and customer replies.</span>
+      </div>}
+      <div className="mt-2"><ErrorNote error={useForAnswers.error} /></div>
     </Panel>
   );
 }
@@ -104,16 +140,20 @@ function ProviderCard({ p }: { p: any }) {
 function Routing() {
   const routes = useQuery({ queryKey: ["routes"], queryFn: () => api<any[]>("/api/ai/routes") });
   const models = useQuery({ queryKey: ["models"], queryFn: () => api<any[]>("/api/ai/models") });
+  const providers = useQuery({ queryKey: ["providers"], queryFn: () => api<any[]>("/api/ai/providers") });
   if (routes.isLoading) return <Spinner />;
   return (
     <div className="space-y-5">
+      {!routes.data?.find((r) => r.task === "answer")?.configured && <p role="status" className="rounded-ctl border border-warn/50 bg-warn-soft px-3 py-2 text-sm text-warn">
+        The Answer route is not configured. Testing a provider key alone is not enough; use “Use this model for answers” after a successful provider test, or set the Answer model below.
+      </p>}
       <p className="text-sm text-muted">Use a small, cheap model for routine answers, rewriting, extraction and summaries. Follow-up rewriting only runs for short or referential messages; use about 80 output tokens at temperature 0. The large model is used only when the knowledge match is weak or the question is complex.</p>
       <datalist id="model-names">{models.data?.map((m) => <option key={m.id} value={m.model} />)}</datalist>
-      {routes.data?.map((r) => <RouteRow key={r.task} r={r} />)}
+      {routes.data?.map((r) => <RouteRow key={r.task} r={r} providers={providers.data ?? []} />)}
     </div>
   );
 }
-function RouteRow({ r }: { r: any }) {
+function RouteRow({ r, providers }: { r: any; providers: any[] }) {
   const qc = useQueryClient();
   const toast = useToast();
   const [f, setF] = useState({ primary_provider: r.primary_provider ?? "anthropic", primary_model: r.primary_model ?? "", fallback_provider: r.fallback_provider ?? "", fallback_model: r.fallback_model ?? "", max_tokens: r.max_tokens ?? 400, temperature: r.temperature ?? 0.2 });
@@ -122,16 +162,40 @@ function RouteRow({ r }: { r: any }) {
   return (
     <Panel title={TASKS[r.task]} actions={<Badge tone={r.configured ? "ok" : "warn"}>{r.configured ? "Configured" : "Not set"}</Badge>}>
       <form className="grid items-end gap-3 md:grid-cols-4" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
-        <Field label="Primary provider">{(i) => <Select id={i} value={f.primary_provider} onChange={(e) => setF({ ...f, primary_provider: e.target.value })}>{PROVIDERS.map((p) => <option key={p}>{p}</option>)}</Select>}</Field>
-        <Field label="Primary model" className="md:col-span-1">{(i) => <Input id={i} list="model-names" required value={f.primary_model} onChange={(e) => setF({ ...f, primary_model: e.target.value })} />}</Field>
-        <Field label="Fallback provider">{(i) => <Select id={i} value={f.fallback_provider} onChange={(e) => setF({ ...f, fallback_provider: e.target.value })}><option value="">None</option>{PROVIDERS.map((p) => <option key={p}>{p}</option>)}</Select>}</Field>
-        <Field label="Fallback model">{(i) => <Input id={i} list="model-names" value={f.fallback_model} onChange={(e) => setF({ ...f, fallback_model: e.target.value })} />}</Field>
+        <Field label="Primary provider">{(i) => <Select id={i} value={f.primary_provider} onChange={(e) => setF({ ...f, primary_provider: e.target.value, primary_model: "" })}>{PROVIDERS.map((p) => <option key={p}>{p}</option>)}</Select>}</Field>
+        <ProviderModelField label="Primary model" provider={f.primary_provider} providers={providers} value={f.primary_model}
+          onChange={(primary_model) => setF({ ...f, primary_model })} />
+        <Field label="Fallback provider">{(i) => <Select id={i} value={f.fallback_provider} onChange={(e) => setF({ ...f, fallback_provider: e.target.value, fallback_model: "" })}><option value="">None</option>{PROVIDERS.map((p) => <option key={p}>{p}</option>)}</Select>}</Field>
+        <ProviderModelField label="Fallback model" provider={f.fallback_provider} providers={providers} value={f.fallback_model}
+          onChange={(fallback_model) => setF({ ...f, fallback_model })} optional />
         <Field label="Max output tokens" hint="Keep answers short to save cost.">{(i) => <Input id={i} type="number" min={16} max={8000} value={f.max_tokens} onChange={(e) => setF({ ...f, max_tokens: +e.target.value })} />}</Field>
         <Field label="Temperature">{(i) => <Input id={i} type="number" step="0.1" min={0} max={2} value={f.temperature} onChange={(e) => setF({ ...f, temperature: +e.target.value })} />}</Field>
         <div className="md:col-span-2 md:text-right"><Button type="submit" variant="primary" loading={save.isPending}>Save route</Button></div>
       </form>
       <div className="mt-2"><ErrorNote error={save.error} /></div>
     </Panel>
+  );
+}
+
+function ProviderModelField({ label, provider, providers, value, onChange, optional = false }: {
+  label: string; provider: string; providers: any[]; value: string; onChange: (model: string) => void; optional?: boolean;
+}) {
+  const config = providers.find((p) => p.name === provider);
+  const catalog = useQuery({
+    queryKey: ["provider-model-catalog", provider, config?.base_url],
+    queryFn: () => api<{ models: { id: string; display_name: string }[] }>(`/api/ai/providers/${provider}/models`),
+    enabled: !!provider && !!config?.has_key,
+  });
+  const available = catalog.data?.models ?? [];
+  return (
+    <Field label={label}>{(id) => available.length ? (
+      <Select id={id} required={!optional} value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">{catalog.isLoading ? "Loading models…" : "Select a model"}</option>
+        {value && !available.some((m) => m.id === value) && <option value={value}>Saved model (not listed): {value}</option>}
+        {available.map((m) => <option key={m.id} value={m.id}>{m.display_name}</option>)}
+      </Select>
+    ) : <Input id={id} list="model-names" required={!optional} placeholder={catalog.isLoading ? "Loading models…" : "Enter model name"} value={value}
+      onChange={(e) => onChange(e.target.value)} />}</Field>
   );
 }
 

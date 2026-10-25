@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookCheck, Check, GraduationCap, Pencil, Plus, Send, Trash2, User as UserIcon, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { Badge, Button, Empty, ErrorNote, IconButton, Switch, Textarea, cx, useConfirm, useToast } from "../components/ui";
 import { DiagnosisCard, type DiagnosisResult } from "../components/Diagnosis";
 import { api } from "../lib/api";
@@ -50,6 +51,7 @@ export default function TeachTab() {
     setSaved((s) => new Set(s).add(ruleText));
     toast(replaces.length ? "Rule updated. The next reply follows it." : "Rule saved. The next reply follows it.");
   };
+  const answerRouteMissing = chat.error instanceof Error && chat.error.message.includes("no route configured for task 'answer'");
 
   return (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(380px,0.8fr)]">
@@ -93,7 +95,13 @@ export default function TeachTab() {
           <div ref={end} />
         </div>
         <form className="space-y-2 border-t border-line p-3" onSubmit={(e) => { e.preventDefault(); sendText(text); }}>
-          <ErrorNote error={chat.error || put.error} />
+          {answerRouteMissing ? (
+            <div role="alert" className="space-y-2 rounded-ctl border border-warn/50 bg-warn-soft px-3 py-2 text-sm text-warn">
+              <p>No answer model is assigned yet. Saving an API key does not choose which model handles answers.</p>
+              <Link to="/ai?tab=routing" className="inline-flex rounded-ctl border border-warn/40 px-3 py-1.5 font-semibold hover:bg-surface">Configure the Answer model</Link>
+            </div>
+          ) : <ErrorNote error={chat.error} />}
+          <ErrorNote error={put.error} />
           {!admin && <p className="text-sm text-muted">Only admins can teach the assistant.</p>}
           <div className="flex gap-2">
             <Textarea aria-label="Instruction" rows={2} className="min-h-[44px] flex-1" disabled={!admin} placeholder="e.g. Keu 'ha' bolle ager proshner sathe mil rekhe porer step bolo" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendText(text); } }} />

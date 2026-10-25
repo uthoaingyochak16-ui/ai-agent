@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+import httpx
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -277,6 +278,88 @@ async def put_provider(name: str, body: ProviderIn, session: AsyncSession = Depe
         c.api_key_enc = crypto.encrypt(body.api_key, aad=f"llm:{name}")
     await session.commit()
     return _prov(name, c)
+
+
+@router.get("/providers/{name}/models")
+async def provider_models(name: str, session: AsyncSession = Depends(get_session)):
+    if name not in PROVIDER_CLASSES:
+        raise HTTPException(404, "Unknown provider")
+    cfg = (await session.execute(select(LLMProviderConfig).where(LLMProviderConfig.name == name))).scalar_one_or_none()
+    if not cfg or not cfg.api_key_enc:
+        raise HTTPException(409, "Save an API key first")
+
+    api_key = crypto.decrypt(cfg.api_key_enc, aad=f"llm:{name}")
+    base = (cfg.base_url or PROVIDER_CLASSES[name].default_base).rstrip("/")
+    timeout = httpx.Timeout(cfg.timeout_s)
+    models: dict[str, str] = {}
+    cursor: str | None = None
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async def get(url: str, **kwargs):
+            try:
+                return await client.get(url, **kwargs)
+            except httpx.TimeoutException as exc:
+                raise HTTPException(504, "Timed out while loading provider models") from exc
+            except httpx.TransportError as exc:
+                raise HTTPException(502, "Could not reach the AI provider") from exc
+
+        for _ in range(20):
+            if name == "anthropic":
+                params = {"limit": 1000}
+                if cursor:
+                    params["after_id"] = cursor
+                response = await get(
+                    f"{base}/v1/models", headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"}, params=params)
+            elif name == "openai":
+                params = {"limit": 100}
+                if cursor:
+                    params["after"] = cursor
+                response = await get(
+                    f"{base}/v1/models", headers={"authorization": f"Bearer {api_key}"}, params=params)
+            else:
+                params = {"pageSize": 1000}
+                if cursor:
+                    params["pageToken"] = cursor
+                response = await get(f"{base}/v1beta/models", headers={"x-goog-api-key": api_key}, params=params)
+
+            if response.status_code >= 400:
+                raise HTTPException(502, f"Provider rejected the model list request ({response.status_code})")
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise HTTPException(502, "Provider returned an invalid model list") from exc
+            if not isinstance(payload, dict):
+                raise HTTPException(502, "Provider returned an unexpected model list")
+
+            entries = payload.get("models" if name == "google" else "data")
+            if not isinstance(entries, list):
+                raise HTTPException(502, "Provider returned an unexpected model list")
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                model_id = entry.get("name" if name == "google" else "id")
+                if not isinstance(model_id, str) or not model_id:
+                    continue
+                if name == "google":
+                    methods = entry.get("supportedGenerationMethods")
+                    if not isinstance(methods, list) or "generateContent" not in methods:
+                        continue
+                    model_id = model_id.removeprefix("models/")
+                display_name = entry.get("displayName" if name == "google" else "display_name")
+                models[model_id] = display_name if isinstance(display_name, str) and display_name else model_id
+
+            if name == "google":
+                cursor = payload.get("nextPageToken")
+            elif payload.get("has_more"):
+                cursor = payload.get("last_id") if name == "anthropic" else (entries[-1].get("id") if entries else None)
+            else:
+                cursor = None
+            if not cursor:
+                break
+        else:
+            raise HTTPException(502, "Provider model list has too many pages")
+
+    return {"models": [{"id": model_id, "display_name": models[model_id]} for model_id in sorted(models)]}
 
 
 class TestIn(BaseModel):

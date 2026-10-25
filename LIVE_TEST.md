@@ -9,7 +9,7 @@ Dashboard-এর **Inbox** আর **Test chat → How this answer was made** প
 |---|---|---|
 | 0.1 | Stack চালু | `docker compose ps`: postgres, redis, backend, worker, frontend, cloudflared সব `Up` |
 | 0.2 | Database migration | `docker compose exec backend alembic current` → সর্বশেষ head (এখন `0016`) |
-| 0.3 | Admin login হয় | না হলে `docker compose exec backend python -m scripts.create_admin` |
+| 0.3 | Admin login হয় | `.env`-এর `ADMIN_EMAIL` ও `ADMIN_PASSWORD` দিয়ে login করুন। Account না থাকলে `docker compose exec backend sh -c 'python -m scripts.create_admin --email "$ADMIN_EMAIL" --password "$ADMIN_PASSWORD"'` চালান; `.env` নিজে থেকে admin account তৈরি করে না |
 | 0.4 | Public URL | `.env`-এর `PUBLIC_BASE_URL` আর `CORS_ORIGINS` = আসল HTTPS ঠিকানা। trycloudflare URL প্রতি restart-এ বদলায়: বদলালে `.env` আর Meta-র webhook URL দুটোই বদলান |
 | 0.5 | Channel | **Channels**: Page/WhatsApp ID, access token, App secret, verify token সেভ করা; **Test connection** = Connected |
 | 0.6 | AI | **AI Settings**: provider চালু, *Answer* route সেট; embedding `hash` নয় (Dashboard-এ embedding warning নেই) |

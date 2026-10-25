@@ -23,7 +23,7 @@ export default function SSO() {
   }, [loginWithSSO, navigate]);
   return (
     <main className="flex min-h-screen items-center justify-center p-4">
-      <div className="w-full max-w-sm space-y-3 rounded-panel border border-line bg-surface p-6 text-sm">
+      <div className="pop w-full max-w-sm space-y-3 rounded-panel border border-line bg-surface p-7 text-sm shadow-lg">
         {err ? <><ErrorNote error={err} /><p>Open the assistant again from the main application, or <Link className="underline" to="/login">sign in with a password</Link>.</p></>
              : <Spinner label="Signing you in…" />}
       </div>

@@ -8,21 +8,21 @@ export const cx = (...a: (string | false | null | undefined)[]) => a.filter(Bool
 type BtnProps = ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "ghost" | "danger"; size?: "sm" | "md"; loading?: boolean };
 export function Button({ variant = "secondary", size = "md", loading, className, children, disabled, ...p }: BtnProps) {
   const v = {
-    primary: "bg-accent text-on-accent hover:bg-accent-strong border-transparent",
-    secondary: "bg-surface text-ink border-line hover:bg-sunken",
+    primary: "bg-accent text-on-accent hover:bg-accent-strong border-transparent shadow-[inset_0_1px_0_rgb(255_255_255/0.16),0_1px_2px_rgb(var(--shadow)/0.25)]",
+    secondary: "bg-surface text-ink border-line hover:border-ink/25 hover:bg-sunken/60 shadow-sm",
     ghost: "bg-transparent text-ink border-transparent hover:bg-sunken",
-    danger: "bg-danger text-white border-transparent hover:opacity-90",
+    danger: "bg-danger text-white border-transparent hover:opacity-90 shadow-sm",
   }[variant];
   return (
     <button type="button" {...p} disabled={disabled || loading}
-      className={cx("inline-flex items-center justify-center gap-2 rounded-ctl border font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed", size === "sm" ? "px-2.5 py-1 text-sm" : "px-3.5 py-2 text-sm", v, className)}>
+      className={cx("inline-flex items-center justify-center gap-2 rounded-ctl border font-semibold transition-[background,border-color,box-shadow,transform] duration-150 active:translate-y-px disabled:opacity-50 disabled:cursor-not-allowed", size === "sm" ? "px-2.5 py-1 text-[13px]" : "px-4 py-2 text-sm", v, className)}>
       {loading && <Loader2 className="h-4 w-4 animate-spin" aria-hidden />}
       {children}
     </button>
   );
 }
 export function IconButton({ label, children, className, ...p }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
-  return <button type="button" {...p} aria-label={label} title={label} className={cx("inline-flex h-9 w-9 items-center justify-center rounded-ctl text-muted hover:bg-sunken hover:text-ink", className)}>{children}</button>;
+  return <button type="button" {...p} aria-label={label} title={label} className={cx("inline-flex h-9 w-9 items-center justify-center rounded-ctl text-muted transition-colors hover:bg-sunken hover:text-ink", className)}>{children}</button>;
 }
 
 /* ---------- form fields ---------- */
@@ -30,13 +30,13 @@ export function Field({ label, hint, children, className }: { label: string; hin
   const id = useId();
   return (
     <div className={className}>
-      <label htmlFor={id} className="mb-1 block text-sm font-semibold">{label}</label>
+      <label htmlFor={id} className="mb-1.5 block text-[13px] font-semibold text-ink/90">{label}</label>
       {children(id)}
       {hint && <p className="mt-1 text-xs text-muted">{hint}</p>}
     </div>
   );
 }
-const ctl = "w-full rounded-ctl border border-line bg-surface px-3 py-2 text-sm placeholder:text-muted/70 focus:border-accent disabled:opacity-60";
+const ctl = "w-full rounded-ctl border border-line bg-surface px-3 py-2 text-sm shadow-[inset_0_1px_2px_rgb(var(--shadow)/0.04)] transition-shadow placeholder:text-muted/70 hover:border-ink/25 focus:border-accent focus:outline-none focus:ring-4 focus:ring-accent/15 disabled:opacity-60";
 type DraftProps = { draftKey?: string; persistDraft?: boolean };
 const draftStorageKey = (kind: string, p: { draftKey?: string; name?: string; id?: string; placeholder?: string; "aria-label"?: string }) => {
   const field = p.draftKey || p.name || p["aria-label"] || p.placeholder || p.id;
@@ -113,8 +113,8 @@ export function Switch({ checked, onChange, label, disabled }: { checked: boolea
   return (
     <label className="inline-flex cursor-pointer items-center gap-2 text-sm">
       <button type="button" role="switch" aria-checked={checked} aria-label={label} disabled={disabled} onClick={() => onChange(!checked)}
-        className={cx("relative h-5 w-9 shrink-0 rounded-full border transition-colors disabled:opacity-50", checked ? "border-accent bg-accent" : "border-line bg-sunken")}>
-        <span className={cx("absolute top-0.5 h-3.5 w-3.5 rounded-full bg-white shadow transition-all", checked ? "left-[18px]" : "left-0.5")} />
+        className={cx("relative h-6 w-10 shrink-0 rounded-full border transition-colors disabled:opacity-50", checked ? "border-accent bg-accent" : "border-line bg-sunken")}>
+        <span className={cx("absolute top-0.5 h-[18px] w-[18px] rounded-full bg-white shadow transition-all", checked ? "left-[19px]" : "left-0.5")} />
       </button>
       <span aria-hidden>{label}</span>
     </label>
@@ -124,7 +124,7 @@ export function Switch({ checked, onChange, label, disabled }: { checked: boolea
 /* ---------- display ---------- */
 const tones = { neutral: "bg-sunken text-muted", ok: "bg-ok-soft text-ok", warn: "bg-warn-soft text-warn", danger: "bg-danger-soft text-danger", blue: "bg-blue-soft text-blue", accent: "bg-accent-soft text-accent-strong" };
 export function Badge({ tone = "neutral", children, className }: { tone?: keyof typeof tones; children: ReactNode; className?: string }) {
-  return <span className={cx("inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-semibold", tones[tone], className)}>{children}</span>;
+  return <span className={cx("inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ring-inset ring-current/15", tones[tone], className)}>{children}</span>;
 }
 export function ChannelBadge({ channel }: { channel: string }) {
   const Icon = channel === "instagram" ? Instagram : channel === "whatsapp" ? Phone : Facebook;
@@ -136,51 +136,53 @@ export function Avatar({ name, src, size = 40 }: { name?: string | null; src?: s
   useEffect(() => setBroken(false), [src]);
   const initials = (name ?? "").trim().split(/\s+/).filter(Boolean).slice(0, 2).map((w) => [...w][0]).join("").toUpperCase() || "?";
   const style = { width: size, height: size, fontSize: Math.round(size * 0.38) };
-  if (src && !broken) return <img src={src} alt="" referrerPolicy="no-referrer" loading="lazy" onError={() => setBroken(true)} style={style} className="shrink-0 rounded-full border border-line bg-sunken object-cover" />;
-  return <span aria-hidden style={style} className="inline-flex shrink-0 items-center justify-center rounded-full bg-accent-soft font-semibold text-accent-strong">{initials}</span>;
+  if (src && !broken) return <img src={src} alt="" referrerPolicy="no-referrer" loading="lazy" onError={() => setBroken(true)} style={style} className="shrink-0 rounded-full border border-line bg-sunken object-cover ring-2 ring-surface" />;
+  return <span aria-hidden style={style} className="inline-flex shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-accent-soft to-brass-soft font-display font-semibold text-accent-strong ring-2 ring-surface">{initials}</span>;
 }
 export function Spinner({ label = "Loading" }: { label?: string }) {
   return <div role="status" className="flex items-center gap-2 py-6 text-sm text-muted"><Loader2 className="h-4 w-4 animate-spin" aria-hidden />{label}</div>;
 }
 export function Empty({ title, children }: { title: string; children?: ReactNode }) {
-  return <div className="rounded-panel border border-dashed border-line px-6 py-10 text-center"><p className="font-semibold">{title}</p>{children && <p className="mx-auto mt-1 max-w-md text-sm text-muted">{children}</p>}</div>;
+  return <div className="rounded-panel border border-dashed border-line bg-surface/50 px-6 py-12 text-center"><span aria-hidden className="mx-auto mb-3 block h-1 w-8 rounded-full bg-brass/70" /><p className="font-display text-base font-semibold">{title}</p>{children && <p className="mx-auto mt-1 max-w-md text-sm text-muted">{children}</p>}</div>;
 }
 export function ErrorNote({ error }: { error: unknown }) {
   if (!error) return null;
-  return <p role="alert" className="rounded-ctl bg-danger-soft px-3 py-2 text-sm text-danger">{error instanceof Error ? error.message : String(error)}</p>;
+  return <p role="alert" className="rounded-ctl border border-danger/25 bg-danger-soft px-3 py-2 text-sm text-danger">{error instanceof Error ? error.message : String(error)}</p>;
 }
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: ReactNode }) {
   return (
-    <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
-      <div><h1 className="text-2xl font-bold tracking-tight">{title}</h1>{subtitle && <p className="mt-0.5 max-w-2xl text-sm text-muted">{subtitle}</p>}</div>
+    <div className="rise mb-6 flex flex-wrap items-end justify-between gap-3">
+      <div><h1 className="text-[28px] font-semibold leading-tight">{title}</h1>{subtitle && <p className="mt-1 max-w-2xl text-sm text-muted">{subtitle}</p>}</div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );
 }
 export const Panel = ({ title, actions, children, className }: { title?: string; actions?: ReactNode; children: ReactNode; className?: string }) => (
-  <section className={cx("rounded-panel border border-line bg-surface", className)}>
-    {(title || actions) && <header className="flex items-center justify-between gap-2 border-b border-line px-4 py-3"><h2 className="font-bold">{title}</h2>{actions}</header>}
-    <div className="p-4">{children}</div>
+  <section className={cx("rounded-panel border border-line bg-surface shadow-panel", className)}>
+    {(title || actions) && <header className="flex items-center justify-between gap-2 border-b border-line px-5 py-3.5"><h2 className="text-[17px] font-semibold">{title}</h2>{actions}</header>}
+    <div className="p-5">{children}</div>
   </section>
 );
 export function Meter({ value, tone = "accent", label }: { value: number; tone?: "accent" | "warn" | "danger" | "blue"; label: string }) {
   const color = { accent: "bg-accent", warn: "bg-warn", danger: "bg-danger", blue: "bg-blue" }[tone];
-  return <div role="meter" aria-label={label} aria-valuenow={Math.round(value * 100)} aria-valuemin={0} aria-valuemax={100} className="h-2 w-full overflow-hidden rounded-full bg-sunken"><div className={cx("h-full rounded-full", color)} style={{ width: `${Math.min(100, Math.max(0, value * 100))}%` }} /></div>;
+  return <div role="meter" aria-label={label} aria-valuenow={Math.round(value * 100)} aria-valuemin={0} aria-valuemax={100} className="h-2 w-full overflow-hidden rounded-full bg-sunken"><div className={cx("h-full rounded-full transition-[width] duration-700", color)} style={{ width: `${Math.min(100, Math.max(0, value * 100))}%` }} /></div>;
 }
-export const Th = ({ children, className }: { children?: ReactNode; className?: string }) => <th scope="col" className={cx("px-3 py-2 text-left text-xs font-semibold text-muted", className)}>{children}</th>;
-export const Td = ({ children, className, ...p }: { children?: ReactNode; className?: string } & React.TdHTMLAttributes<HTMLTableCellElement>) => <td {...p} className={cx("px-3 py-2.5 align-top", className)}>{children}</td>;
+export const Th = ({ children, className }: { children?: ReactNode; className?: string }) => <th scope="col" className={cx("px-3.5 py-2.5 text-left text-xs font-semibold text-muted", className)}>{children}</th>;
+export const Td = ({ children, className, ...p }: { children?: ReactNode; className?: string } & React.TdHTMLAttributes<HTMLTableCellElement>) => <td {...p} className={cx("px-3.5 py-3 align-top", className)}>{children}</td>;
 export const TableWrap = ({ children, compact }: { children: ReactNode; compact?: boolean }) => (
-  <div className="overflow-x-auto rounded-panel border border-line bg-surface">
-    <table className={cx("w-full text-sm [&_tbody_tr]:border-t [&_tbody_tr]:border-line [&_thead]:bg-sunken/60", !compact && "min-w-[640px]")}>{children}</table>
+  <div className="overflow-x-auto rounded-panel border border-line bg-surface shadow-panel">
+    <table className={cx("w-full text-sm [&_tbody_tr]:border-t [&_tbody_tr]:border-line [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-sunken/40 [&_thead]:bg-sunken/70", !compact && "min-w-[640px]")}>{children}</table>
   </div>
 );
 
 export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { id: T; label: string }[]; value: T; onChange: (t: T) => void }) {
   return (
-    <div role="tablist" className="mb-4 flex gap-1 overflow-x-auto border-b border-line">
+    <div role="tablist" className="mb-5 flex gap-1 overflow-x-auto border-b border-line">
       {tabs.map((t) => (
         <button key={t.id} type="button" role="tab" aria-selected={value === t.id} onClick={() => onChange(t.id)}
-          className={cx("-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-semibold", value === t.id ? "border-accent text-accent-strong" : "border-transparent text-muted hover:text-ink")}>{t.label}</button>
+          className={cx("-mb-px inline-flex items-center gap-2 whitespace-nowrap rounded-t-ctl border-b-2 px-3.5 py-2.5 text-sm font-semibold transition-colors", value === t.id ? "border-brass text-ink" : "border-transparent text-muted hover:bg-sunken/70 hover:text-ink")}>
+          {t.label}
+        </button>
       ))}
     </div>
   );
@@ -206,10 +208,10 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
     return () => { document.removeEventListener("keydown", onKey); prev?.focus(); };
   }, [onClose]);
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:p-10" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={ref} role="dialog" aria-modal="true" aria-label={title} className={cx("w-full rounded-panel border border-line bg-surface shadow-xl", wide ? "max-w-3xl" : "max-w-lg")}>
-        <header className="flex items-center justify-between border-b border-line px-4 py-3"><h2 className="font-bold">{title}</h2><IconButton data-close label="Close" onClick={onClose}><X className="h-4 w-4" aria-hidden /></IconButton></header>
-        <div className="p-4">{children}</div>
+    <div className="fade fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-side/60 p-4 backdrop-blur-sm sm:p-10" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div ref={ref} role="dialog" aria-modal="true" aria-label={title} className={cx("pop w-full rounded-panel border border-line bg-surface shadow-xl", wide ? "max-w-3xl" : "max-w-lg")}>
+        <header className="flex items-center justify-between border-b border-line px-5 py-3.5"><h2 className="text-lg font-semibold">{title}</h2><IconButton data-close label="Close" onClick={onClose}><X className="h-4 w-4" aria-hidden /></IconButton></header>
+        <div className="p-5">{children}</div>
       </div>
     </div>
   );
@@ -255,7 +257,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastCtx.Provider value={push}>
       <ConfirmProvider>{children}</ConfirmProvider>
       <div aria-live="polite" className="fixed bottom-4 right-4 z-[60] flex max-w-sm flex-col gap-2">
-        {items.map((t) => <div key={t.id} className={cx("rounded-ctl border px-3 py-2 text-sm shadow-lg", t.tone === "ok" ? "border-ok bg-ok-soft text-ok" : "border-danger bg-danger-soft text-danger")}>{t.text}</div>)}
+        {items.map((t) => <div key={t.id} role="status" className={cx("slide-in rounded-ctl border border-l-4 bg-surface px-4 py-2.5 text-sm font-medium text-ink shadow-lg", t.tone === "ok" ? "border-line border-l-ok" : "border-line border-l-danger")}>{t.text}</div>)}
       </div>
     </ToastCtx.Provider>
   );
